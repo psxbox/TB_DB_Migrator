@@ -1,0 +1,240 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "tbmigrator/1.0.0": {
+        "dependencies": {
+          "CassandraCSharpDriver": "3.22.0",
+          "Npgsql": "9.0.5",
+          "Spectre.Console": "0.57.0",
+          "YamlDotNet": "15.3.0"
+        },
+        "runtime": {
+          "tbmigrator.dll": {}
+        }
+      },
+      "CassandraCSharpDriver/3.22.0": {
+        "dependencies": {
+          "K4os.Compression.LZ4": "1.1.11",
+          "Microsoft.Extensions.Logging": "1.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.2",
+          "Newtonsoft.Json": "9.0.1",
+          "System.Management": "4.7.0"
+        },
+        "runtime": {
+          "lib/netstandard2.0/Cassandra.dll": {
+            "assemblyVersion": "3.99.0.0",
+            "fileVersion": "3.22.0.0"
+          }
+        }
+      },
+      "K4os.Compression.LZ4/1.1.11": {
+        "runtime": {
+          "lib/netstandard2.0/K4os.Compression.LZ4.dll": {
+            "assemblyVersion": "1.1.11.0",
+            "fileVersion": "1.1.11.0"
+          }
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions/8.0.2": {
+        "runtime": {
+          "lib/net8.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll": {
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.1024.46610"
+          }
+        }
+      },
+      "Microsoft.Extensions.Logging/1.0.0": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "8.0.2",
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.2"
+        },
+        "runtime": {
+          "lib/netstandard1.1/Microsoft.Extensions.Logging.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.20622"
+          }
+        }
+      },
+      "Microsoft.Extensions.Logging.Abstractions/8.0.2": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "8.0.2"
+        },
+        "runtime": {
+          "lib/net8.0/Microsoft.Extensions.Logging.Abstractions.dll": {
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.1024.46610"
+          }
+        }
+      },
+      "Newtonsoft.Json/9.0.1": {
+        "runtime": {
+          "lib/netstandard1.0/Newtonsoft.Json.dll": {
+            "assemblyVersion": "9.0.0.0",
+            "fileVersion": "9.0.1.19813"
+          }
+        }
+      },
+      "Npgsql/9.0.5": {
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.2"
+        },
+        "runtime": {
+          "lib/net8.0/Npgsql.dll": {
+            "assemblyVersion": "9.0.5.0",
+            "fileVersion": "9.0.5.0"
+          }
+        }
+      },
+      "Spectre.Console/0.57.0": {
+        "dependencies": {
+          "Spectre.Console.Ansi": "0.57.0"
+        },
+        "runtime": {
+          "lib/net10.0/Spectre.Console.dll": {
+            "assemblyVersion": "0.0.0.0",
+            "fileVersion": "0.57.0.0"
+          }
+        }
+      },
+      "Spectre.Console.Ansi/0.57.0": {
+        "runtime": {
+          "lib/net10.0/Spectre.Console.Ansi.dll": {
+            "assemblyVersion": "0.0.0.0",
+            "fileVersion": "0.57.0.0"
+          }
+        }
+      },
+      "System.CodeDom/4.7.0": {
+        "runtime": {
+          "lib/netstandard2.0/System.CodeDom.dll": {
+            "assemblyVersion": "4.0.3.0",
+            "fileVersion": "4.700.19.56404"
+          }
+        }
+      },
+      "System.Management/4.7.0": {
+        "dependencies": {
+          "System.CodeDom": "4.7.0"
+        },
+        "runtime": {
+          "lib/netstandard2.0/System.Management.dll": {
+            "assemblyVersion": "4.0.1.0",
+            "fileVersion": "4.700.19.56404"
+          }
+        },
+        "runtimeTargets": {
+          "runtimes/win/lib/netcoreapp2.0/System.Management.dll": {
+            "rid": "win",
+            "assetType": "runtime",
+            "assemblyVersion": "4.0.1.0",
+            "fileVersion": "4.700.19.56404"
+          }
+        }
+      },
+      "YamlDotNet/15.3.0": {
+        "runtime": {
+          "lib/net8.0/YamlDotNet.dll": {
+            "assemblyVersion": "15.0.0.0",
+            "fileVersion": "15.3.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "tbmigrator/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "CassandraCSharpDriver/3.22.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-T5vjErmZ42Q1TAzbYSJvOrAzOZmb/d+v3OoIYrKfbcqjDuvedd61e0bAaaLpgiujPBBO+qFpxR4T0WSXkMr/fA==",
+      "path": "cassandracsharpdriver/3.22.0",
+      "hashPath": "cassandracsharpdriver.3.22.0.nupkg.sha512"
+    },
+    "K4os.Compression.LZ4/1.1.11": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-RNvJw0UGkedPhCqVBNIogtfQebY+bQt0PN7xDbVe5LWLra0ZEqPfjPSl7iStj3rgDnkqkkTTpm+vCX3hU1qKmA==",
+      "path": "k4os.compression.lz4/1.1.11",
+      "hashPath": "k4os.compression.lz4.1.1.11.nupkg.sha512"
+    },
+    "Microsoft.Extensions.DependencyInjection.Abstractions/8.0.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-3iE7UF7MQkCv1cxzCahz+Y/guQbTqieyxyaWKhrRO91itI9cOKO76OHeQDahqG4MmW5umr3CcCvGmK92lWNlbg==",
+      "path": "microsoft.extensions.dependencyinjection.abstractions/8.0.2",
+      "hashPath": "microsoft.extensions.dependencyinjection.abstractions.8.0.2.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Logging/1.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-0mDuASVrd/nMeBYIJSK+9lT3TSmWxUXP/ipVB1pF1ApMN5fqGCckPTNwmOfT4Z9wPkXGnhbwFTGrxZvbzTWxOg==",
+      "path": "microsoft.extensions.logging/1.0.0",
+      "hashPath": "microsoft.extensions.logging.1.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Logging.Abstractions/8.0.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-nroMDjS7hNBPtkZqVBbSiQaQjWRDxITI8Y7XnDs97rqG3EbzVTNLZQf7bIeUJcaHOV8bca47s1Uxq94+2oGdxA==",
+      "path": "microsoft.extensions.logging.abstractions/8.0.2",
+      "hashPath": "microsoft.extensions.logging.abstractions.8.0.2.nupkg.sha512"
+    },
+    "Newtonsoft.Json/9.0.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-U82mHQSKaIk+lpSVCbWYKNavmNH1i5xrExDEquU1i6I5pV6UMOqRnJRSlKO3cMPfcpp0RgDY+8jUXHdQ4IfXvw==",
+      "path": "newtonsoft.json/9.0.1",
+      "hashPath": "newtonsoft.json.9.0.1.nupkg.sha512"
+    },
+    "Npgsql/9.0.5": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-NRZkUlTUh06f7f14wriEoO+BrJcyw/agh3xozXLM3ii7C/08SyXqcI89EMfZJuHkOcfDU8W0enGcZ8RGNVOw0w==",
+      "path": "npgsql/9.0.5",
+      "hashPath": "npgsql.9.0.5.nupkg.sha512"
+    },
+    "Spectre.Console/0.57.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-X5+4ZsUYTPlTs5PEoKRlxUuKOa1AkEoAGM34pUeJPjsBdtOnvnaVb31hqewhooomihl1i9fEBid1fz8XxZTacQ==",
+      "path": "spectre.console/0.57.0",
+      "hashPath": "spectre.console.0.57.0.nupkg.sha512"
+    },
+    "Spectre.Console.Ansi/0.57.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-DGeYljyWAIHSeUAoUGqyzyOqS8WlsHKW+y4zOZ0OO61oqrhx90jHS+XG5Kpq/wWz6ovIs2VL/0CTKpUVa7tdWg==",
+      "path": "spectre.console.ansi/0.57.0",
+      "hashPath": "spectre.console.ansi.0.57.0.nupkg.sha512"
+    },
+    "System.CodeDom/4.7.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Hs9pw/kmvH3lXaZ1LFKj3pLQsiGfj2xo3sxSzwiLlRL6UcMZUTeCfoJ9Udalvn3yq5dLlPEZzYegrTQ1/LhPOQ==",
+      "path": "system.codedom/4.7.0",
+      "hashPath": "system.codedom.4.7.0.nupkg.sha512"
+    },
+    "System.Management/4.7.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-IY+uuGhgzWiCg21i8IvQeY/Z7m1tX8VuPF+ludfn7iTCaccTtJo5HkjZbBEL8kbBubKhAKKtNXr7uMtmAc28Pw==",
+      "path": "system.management/4.7.0",
+      "hashPath": "system.management.4.7.0.nupkg.sha512"
+    },
+    "YamlDotNet/15.3.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-F93japYa9YrJ59AZGhgdaUGHN7ITJ55FBBg/D/8C0BDgahv/rQD6MOSwHxOJJpon1kYyslVbeBrQ2wcJhox01w==",
+      "path": "yamldotnet/15.3.0",
+      "hashPath": "yamldotnet.15.3.0.nupkg.sha512"
+    }
+  }
+}
