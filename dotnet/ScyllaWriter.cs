@@ -26,12 +26,12 @@ public class ScyllaWriter
             "entity_type text, entity_id timeuuid, key text, partition bigint," +
             "PRIMARY KEY ((entity_type,entity_id,key),partition))" +
             " WITH CLUSTERING ORDER BY (partition ASC)" +
-            " AND compaction={'class':'LeveledCompactionStrategy'}",
+            " AND compaction={{'class':'LeveledCompactionStrategy'}}",
         "CREATE TABLE IF NOT EXISTS {0}.ts_kv_latest_cf (" +
             "entity_type text, entity_id timeuuid, key text," +
             "ts bigint, bool_v boolean, str_v text, long_v bigint, dbl_v double, json_v text," +
             "PRIMARY KEY ((entity_type,entity_id),key))" +
-            " WITH compaction={'class':'LeveledCompactionStrategy'}",
+            " WITH compaction={{'class':'LeveledCompactionStrategy'}}",
     ];
 
     public static ScyllaWriter Connect(string host, int port, string keyspace, int concurrency)
