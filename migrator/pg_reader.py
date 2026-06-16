@@ -65,11 +65,24 @@ class PgReader:
             cur.execute("SELECT COUNT(*) FROM ts_kv")
             return cur.fetchone()[0]
 
+    def _has_rows(self, table: str) -> bool:
+        with self._conn.cursor() as cur:
+            cur.execute(f"SELECT 1 FROM {table} LIMIT 1")
+            return cur.fetchone() is not None
+
     def iter_distinct_entities(self) -> Generator[str, None, None]:
-        """Yields distinct entity_id strings using a server-side cursor."""
+        """Yields distinct entity_id strings using a server-side cursor.
+
+        Reads from ts_kv_latest (one row per entity+key) which is orders of
+        magnitude smaller than ts_kv, so the DISTINCT scan returns the first
+        entity almost immediately instead of scanning all of ts_kv first.
+        Falls back to ts_kv if ts_kv_latest is empty.
+        """
+        source = "ts_kv_latest" if self._has_rows("ts_kv_latest") else "ts_kv"
+        logger.info("Reading distinct entities from %s", source)
         with self._conn.cursor("distinct_entities") as cur:
             cur.itersize = 1000
-            cur.execute("SELECT DISTINCT entity_id FROM ts_kv")
+            cur.execute(f"SELECT DISTINCT entity_id FROM {source}")
             for (entity_id,) in cur:
                 yield str(entity_id)
 

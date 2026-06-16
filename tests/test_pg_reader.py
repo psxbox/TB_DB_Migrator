@@ -107,6 +107,42 @@ def test_load_key_map_pure_sql_mode_returns_empty(mock_conn):
     assert result == {}
 
 
+def test_iter_distinct_entities_prefers_ts_kv_latest(mock_conn):
+    """iter_distinct_entities reads from ts_kv_latest when it has rows."""
+    cur = MagicMock()
+    cur.fetchone.return_value = (1,)  # _has_rows("ts_kv_latest") -> True
+    cur.__iter__ = lambda self: iter([("e1",), ("e2",)])
+    cm = MagicMock()
+    cm.__enter__.return_value = cur
+    cm.__exit__.return_value = False
+    mock_conn.cursor.return_value = cm
+
+    reader = PgReader(mock_conn)
+    result = list(reader.iter_distinct_entities())
+
+    assert result == ["e1", "e2"]
+    executed = [c.args[0] for c in cur.execute.call_args_list]
+    assert any("SELECT DISTINCT entity_id FROM ts_kv_latest" in q for q in executed)
+
+
+def test_iter_distinct_entities_falls_back_to_ts_kv(mock_conn):
+    """If ts_kv_latest is empty, iter_distinct_entities falls back to ts_kv."""
+    cur = MagicMock()
+    cur.fetchone.return_value = None  # _has_rows("ts_kv_latest") -> False
+    cur.__iter__ = lambda self: iter([("e1",)])
+    cm = MagicMock()
+    cm.__enter__.return_value = cur
+    cm.__exit__.return_value = False
+    mock_conn.cursor.return_value = cm
+
+    reader = PgReader(mock_conn)
+    result = list(reader.iter_distinct_entities())
+
+    assert result == ["e1"]
+    executed = [c.args[0] for c in cur.execute.call_args_list]
+    assert any("SELECT DISTINCT entity_id FROM ts_kv" == q for q in executed)
+
+
 def test_iter_ts_kv_for_entity_single_batch(mock_conn):
     """iter_ts_kv_for_entity yields rows and stops when batch is partial."""
     rows = [
