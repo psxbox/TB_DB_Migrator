@@ -46,10 +46,18 @@ class PgReader:
         return entity_map
 
     def load_key_map(self) -> Dict[int, str]:
-        """Returns {key_id: key_name} from ts_kv_dictionary."""
-        with self._conn.cursor() as cur:
-            cur.execute("SELECT key_id, key FROM ts_kv_dictionary")
-            return {row[0]: row[1] for row in cur.fetchall()}
+        """Returns {key_id: key_name} from key_dictionary (TB 4.x) or ts_kv_dictionary (older TB), or {} for pure-SQL mode."""
+        for table in ("key_dictionary", "ts_kv_dictionary"):
+            with self._conn.cursor() as cur:
+                try:
+                    cur.execute(f"SELECT key_id, key FROM {table}")
+                    result = {row[0]: row[1] for row in cur.fetchall()}
+                    logger.info("Loaded %d keys from %s", len(result), table)
+                    return result
+                except psycopg2.Error:
+                    self._conn.rollback()
+        logger.info("No key dictionary table found — pure-SQL mode, using ts_kv.key directly")
+        return {}
 
     def count_ts_kv(self) -> int:
         """Returns total row count of ts_kv table."""
