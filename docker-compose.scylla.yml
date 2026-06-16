@@ -1,8 +1,9 @@
 services:
   scylladb:
-    image: scylladb/scylla:6.2
+    image: scylladb/scylla:2026.1
     container_name: scylladb
-    command: --smp 2 --memory 2G --overprovisioned 1
+    ports:
+      - "127.0.0.1:9042:9042"   # CQL — exposed so the migrator can run on the host (or a remote box)
     volumes:
       - scylla-data:/var/lib/scylla
     healthcheck:
@@ -10,38 +11,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-    networks:
-      - migrator-net
-
-  tb-migrator:
-    build:
-      context: .
-    container_name: tb-migrator
-    environment:
-      PG_HOST: postgres
-      PG_PORT: "5432"
-      PG_DB: thingsboard
-      PG_USER: postgres
-      PG_PASSWORD: postgres
-      SCYLLA_HOST: scylladb
-      SCYLLA_PORT: "9042"
-      SCYLLA_KEYSPACE: thingsboard
-    depends_on:
-      scylladb:
-        condition: service_healthy
-    volumes:
-      - ./migration_progress.json:/app/migration_progress.json
-    stdin_open: true
-    tty: true
-    networks:
-      - migrator-net
-      - tb_ce_new_default
-
-networks:
-  migrator-net:
-    driver: bridge
-  tb_ce_new_default:
-    external: true
 
 volumes:
   scylla-data:

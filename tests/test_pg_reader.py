@@ -53,7 +53,7 @@ def test_load_entity_map_all_tables(mock_conn):
 
 
 def test_load_key_map(mock_conn):
-    """load_key_map returns {key_id: key_name} dict."""
+    """load_key_map returns {key_id: key_name} dict, querying key_dictionary first (TB 4.x)."""
     cur = MagicMock()
     cur.fetchall.return_value = [(1, "temperature"), (2, "humidity")]
     cm = MagicMock()
@@ -65,7 +65,46 @@ def test_load_key_map(mock_conn):
     result = reader.load_key_map()
 
     assert result == {1: "temperature", 2: "humidity"}
-    cur.execute.assert_called_once_with("SELECT key_id, key FROM ts_kv_dictionary")
+    cur.execute.assert_called_once_with("SELECT key_id, key FROM key_dictionary")
+
+
+def test_load_key_map_falls_back_to_ts_kv_dictionary(mock_conn):
+    """If key_dictionary is missing, load_key_map falls back to ts_kv_dictionary (older TB)."""
+    import psycopg2
+
+    cur = MagicMock()
+    # First query (key_dictionary) raises; second (ts_kv_dictionary) succeeds.
+    cur.execute.side_effect = [psycopg2.Error("no such table"), None]
+    cur.fetchall.return_value = [(1, "temperature")]
+    cm = MagicMock()
+    cm.__enter__.return_value = cur
+    cm.__exit__.return_value = False
+    mock_conn.cursor.return_value = cm
+
+    reader = PgReader(mock_conn)
+    result = reader.load_key_map()
+
+    assert result == {1: "temperature"}
+    executed = [c.args[0] for c in cur.execute.call_args_list]
+    assert "SELECT key_id, key FROM key_dictionary" in executed
+    assert "SELECT key_id, key FROM ts_kv_dictionary" in executed
+
+
+def test_load_key_map_pure_sql_mode_returns_empty(mock_conn):
+    """If neither dictionary table exists (pure-SQL mode), returns {}."""
+    import psycopg2
+
+    cur = MagicMock()
+    cur.execute.side_effect = psycopg2.Error("no such table")
+    cm = MagicMock()
+    cm.__enter__.return_value = cur
+    cm.__exit__.return_value = False
+    mock_conn.cursor.return_value = cm
+
+    reader = PgReader(mock_conn)
+    result = reader.load_key_map()
+
+    assert result == {}
 
 
 def test_iter_ts_kv_for_entity_single_batch(mock_conn):

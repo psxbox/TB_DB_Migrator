@@ -79,19 +79,29 @@ class PgReader:
         batch_size: int = 5000,
         min_ts: Optional[int] = None,
     ) -> Generator[dict, None, None]:
-        """Yields rows from ts_kv for the given entity_id, in batches."""
-        query = "SELECT entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v FROM ts_kv WHERE entity_id = %s"
-        params: list = [entity_id]
-        if min_ts is not None:
-            query += " AND ts > %s"
-            params.append(min_ts)
-        query += " ORDER BY ts ASC"
+        """Yields rows from ts_kv for the given entity_id, in batches.
 
-        offset = 0
+        Uses keyset pagination on the (key, ts) primary-key prefix instead of
+        LIMIT/OFFSET, so each page is an index seek (O(n) overall) rather than an
+        ever-growing scan (O(n^2)).
+        """
+        cols = "entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v"
+        last_key = None
+        last_ts = None
         while True:
-            paged = query + f" LIMIT {batch_size} OFFSET {offset}"
+            params: list = [entity_id]
+            query = f"SELECT {cols} FROM ts_kv WHERE entity_id = %s"
+            if last_key is not None:
+                query += " AND (key, ts) > (%s, %s)"
+                params.extend([last_key, last_ts])
+            if min_ts is not None:
+                query += " AND ts > %s"
+                params.append(min_ts)
+            query += " ORDER BY key ASC, ts ASC LIMIT %s"
+            params.append(batch_size)
+
             with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(paged, params)
+                cur.execute(query, params)
                 rows = cur.fetchall()
             if not rows:
                 break
@@ -99,22 +109,33 @@ class PgReader:
                 yield dict(row)
             if len(rows) < batch_size:
                 break
-            offset += batch_size
+            last_key = rows[-1]["key"]
+            last_ts = rows[-1]["ts"]
 
     def iter_ts_kv_by_ts(
         self,
         watermark_ts: int,
         batch_size: int = 5000,
     ) -> Generator[dict, None, None]:
-        """Yields ts_kv rows with ts > watermark_ts, ordered by ts ASC. Used for live sync."""
-        offset = 0
+        """Yields ts_kv rows with ts > watermark_ts, ordered by (ts, entity_id, key). Used for live sync.
+
+        Keyset pagination on (ts, entity_id, key) avoids OFFSET re-scans and never
+        skips rows that share the same ts at a page boundary.
+        """
+        cols = "entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v"
+        last = None  # (ts, entity_id, key)
         while True:
-            query = (
-                "SELECT entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v "
-                "FROM ts_kv WHERE ts > %s ORDER BY ts ASC LIMIT %s OFFSET %s"
-            )
+            if last is None:
+                query = f"SELECT {cols} FROM ts_kv WHERE ts > %s"
+                params: list = [watermark_ts]
+            else:
+                query = f"SELECT {cols} FROM ts_kv WHERE (ts, entity_id, key) > (%s, %s, %s)"
+                params = [last[0], last[1], last[2]]
+            query += " ORDER BY ts ASC, entity_id ASC, key ASC LIMIT %s"
+            params.append(batch_size)
+
             with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(query, [watermark_ts, batch_size, offset])
+                cur.execute(query, params)
                 rows = cur.fetchall()
             if not rows:
                 break
@@ -122,7 +143,8 @@ class PgReader:
                 yield dict(row)
             if len(rows) < batch_size:
                 break
-            offset += batch_size
+            r = rows[-1]
+            last = (r["ts"], r["entity_id"], r["key"])
 
     def iter_ts_kv_latest(self) -> Generator[dict, None, None]:
         """Yields all rows from ts_kv_latest."""

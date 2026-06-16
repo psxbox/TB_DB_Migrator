@@ -1,8 +1,7 @@
 import uuid
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from migrator.scylla_writer import ScyllaWriter, SCHEMA_STATEMENTS
-from cassandra import WriteTimeout
 
 
 @pytest.fixture
@@ -32,8 +31,10 @@ def test_init_schema_executes_all_statements(mock_session):
     assert mock_session.execute.call_count == 4
 
 
-def test_write_ts_batch_returns_partitions(writer, mock_session):
+@patch("migrator.scylla_writer.execute_concurrent_with_args")
+def test_write_ts_batch_returns_partitions(mock_ec, writer):
     """write_ts_batch returns set of (entity_type, eid_str, key_name, partition) tuples."""
+    mock_ec.return_value = [(True, None)]
     rows = [
         {"entity_id": "550e8400-e29b-11d4-a716-446655440000", "key": 1,
          "ts": 1718500000000, "bool_v": None, "str_v": None,
@@ -49,41 +50,49 @@ def test_write_ts_batch_returns_partitions(writer, mock_session):
     assert entity_type == "DEVICE"
     assert key_name == "temperature"
     assert partition == 1718444800000
-    mock_session.execute.assert_called_once()
+    mock_ec.assert_called_once()
 
 
-def test_write_ts_batch_retries_on_write_timeout(writer, mock_session):
-    """write_ts_batch halves rows and retries on WriteTimeout."""
-    rows = [
-        {"entity_id": "550e8400-e29b-11d4-a716-446655440000", "key": 1,
-         "ts": 1000, "bool_v": None, "str_v": None, "long_v": 1, "dbl_v": None, "json_v": None},
-        {"entity_id": "550e8400-e29b-11d4-a716-446655440001", "key": 1,
-         "ts": 2000, "bool_v": None, "str_v": None, "long_v": 2, "dbl_v": None, "json_v": None},
+@patch("migrator.scylla_writer.time.sleep")
+@patch("migrator.scylla_writer.execute_concurrent_with_args")
+def test_execute_concurrent_retries_failed_rows(mock_ec, mock_sleep, writer):
+    """_execute_concurrent retries only the rows that failed, then succeeds."""
+    err = Exception("write timeout")
+    # First call: the single row fails. Second call: it succeeds.
+    mock_ec.side_effect = [
+        [(False, err)],
+        [(True, None)],
     ]
-    key_map = {1: "temp"}
-    partition_fn = lambda ts: 0
-
-    # Fail once, succeed on second attempt
-    mock_session.execute.side_effect = [WriteTimeout("timeout", write_type=0), None]
-
-    with patch("time.sleep"):
-        result = writer.write_ts_batch(rows, "DEVICE", key_map, partition_fn)
-
-    assert mock_session.execute.call_count == 2
-    assert isinstance(result, set)
+    writer._execute_concurrent(writer._ps_ts, [("a",)], max_retries=4)
+    assert mock_ec.call_count == 2
 
 
-def test_write_partitions_executes_batch(writer, mock_session):
+@patch("migrator.scylla_writer.time.sleep")
+@patch("migrator.scylla_writer.execute_concurrent_with_args")
+def test_execute_concurrent_raises_after_retries(mock_ec, mock_sleep, writer):
+    """_execute_concurrent raises the underlying error once retries are exhausted."""
+    err = RuntimeError("permanent failure")
+    mock_ec.return_value = [(False, err)]
+    with pytest.raises(RuntimeError, match="permanent failure"):
+        writer._execute_concurrent(writer._ps_ts, [("a",)], max_retries=2)
+    assert mock_ec.call_count == 2
+
+
+@patch("migrator.scylla_writer.execute_concurrent_with_args")
+def test_write_partitions_executes(mock_ec, writer):
     """write_partitions writes to ts_kv_partitions_cf."""
+    mock_ec.return_value = [(True, None)]
     partitions = {
         ("DEVICE", "550e8400-e29b-11d4-a716-446655440000", "temperature", 1718444800000),
     }
     writer.write_partitions(partitions)
-    mock_session.execute.assert_called_once()
+    mock_ec.assert_called_once()
 
 
-def test_write_latest_batch_executes_batch(writer, mock_session):
+@patch("migrator.scylla_writer.execute_concurrent_with_args")
+def test_write_latest_batch_executes(mock_ec, writer):
     """write_latest_batch writes to ts_kv_latest_cf."""
+    mock_ec.return_value = [(True, None)]
     rows = [
         {"entity_id": "550e8400-e29b-11d4-a716-446655440000", "key": 1,
          "ts": 9000, "bool_v": None, "str_v": None,
@@ -91,11 +100,13 @@ def test_write_latest_batch_executes_batch(writer, mock_session):
     ]
     key_map = {1: "temperature"}
     writer.write_latest_batch(rows, "DEVICE", key_map)
-    mock_session.execute.assert_called_once()
+    mock_ec.assert_called_once()
 
 
-def test_write_ts_batch_cast_strings(writer, mock_session):
+@patch("migrator.scylla_writer.execute_concurrent_with_args")
+def test_write_ts_batch_cast_strings(mock_ec, writer):
     """write_ts_batch applies cast_fn to str_v when provided."""
+    mock_ec.return_value = [(True, None)]
     rows = [
         {"entity_id": "550e8400-e29b-11d4-a716-446655440000", "key": 1,
          "ts": 1000, "bool_v": None, "str_v": "42",
@@ -112,16 +123,13 @@ def test_write_ts_batch_cast_strings(writer, mock_session):
     writer.write_ts_batch(rows, "DEVICE", key_map, partition_fn, cast_fn=cast_fn)
 
     assert cast_calls == ["42"]
-    mock_session.execute.assert_called_once()
+    mock_ec.assert_called_once()
 
 
-def test_execute_with_retry_retries_on_write_timeout(writer, mock_session):
-    """_execute_with_retry retries up to max_retries times on WriteTimeout."""
-    mock_session.execute.side_effect = [
-        WriteTimeout("timeout", write_type=0),
-        WriteTimeout("timeout", write_type=0),
-        None,
-    ]
-    with patch("time.sleep"):
-        writer._execute_with_retry("SELECT 1", [], max_retries=3)
-    assert mock_session.execute.call_count == 3
+@patch("migrator.scylla_writer.execute_concurrent_with_args")
+def test_write_empty_batches_are_noops(mock_ec, writer):
+    """Empty inputs must not call execute_concurrent."""
+    writer.write_ts_batch([], "DEVICE", {}, lambda ts: 0)
+    writer.write_partitions(set())
+    writer.write_latest_batch([], "DEVICE", {})
+    mock_ec.assert_not_called()

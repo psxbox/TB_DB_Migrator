@@ -99,12 +99,10 @@ class Orchestrator:
                 continue
 
             batch_rows = []
-            entity_row_count = 0
             for row in self._reader.iter_ts_kv_for_entity(entity_id_str, self._cfg.batch_size):
                 batch_rows.append(row)
                 if len(batch_rows) >= self._cfg.batch_size:
                     self._flush_ts_batch(batch_rows, entity_type, key_map)
-                    entity_row_count += len(batch_rows)
                     progress.migrated_rows += len(batch_rows)
                     self._tracker.update(
                         last_entity_id=entity_id_str,
@@ -114,7 +112,6 @@ class Orchestrator:
 
             if batch_rows:
                 self._flush_ts_batch(batch_rows, entity_type, key_map)
-                entity_row_count += len(batch_rows)
                 progress.migrated_rows += len(batch_rows)
 
             self._tracker.update(
