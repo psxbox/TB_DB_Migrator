@@ -1,0 +1,7 @@
+scylla-driver>=3.26.6
+psycopg2-binary>=2.9.9
+pyyaml>=6.0.2
+rich>=13.7.1
+click>=8.1.7
+pytest>=8.2.0
+pytest-mock>=3.14.0

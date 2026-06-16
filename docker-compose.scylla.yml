@@ -1,0 +1,38 @@
+services:
+  scylladb:
+    image: scylladb/scylla:6.2
+    container_name: scylladb
+    command: --smp 2 --memory 2G --overprovisioned 1
+    volumes:
+      - scylla-data:/var/lib/scylla
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  tb-migrator:
+    build:
+      context: .
+    container_name: tb-migrator
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: thingsboard
+      PG_USER: postgres
+      PG_PASSWORD: postgres
+      SCYLLA_HOST: scylladb
+      SCYLLA_PORT: "9042"
+      SCYLLA_KEYSPACE: thingsboard
+    depends_on:
+      postgres:
+        condition: service_started
+      scylladb:
+        condition: service_healthy
+    volumes:
+      - ./migration_progress.json:/app/migration_progress.json
+    stdin_open: true
+    tty: true
+
+volumes:
+  scylla-data:

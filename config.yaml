@@ -1,0 +1,19 @@
+pg:
+  host: localhost
+  port: 5432
+  db: thingsboard
+  user: postgres
+  password: postgres
+
+scylla:
+  host: localhost
+  port: 9042
+  keyspace: thingsboard
+
+migrator:
+  batch_size: 5000
+  live_sync_interval: 5.0
+  lag_threshold_ms: 30000
+  partitioning: MONTHS
+  cast_strings: false
+  checkpoint_file: migration_progress.json
