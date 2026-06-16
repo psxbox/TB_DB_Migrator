@@ -37,3 +37,7 @@ Thumbs.db
 
 # Docker
 *.tar
+
+# .NET build artifacts
+dotnet/bin/
+dotnet/obj/
