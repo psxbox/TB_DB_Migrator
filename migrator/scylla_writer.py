@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 import uuid
 from typing import Dict, List, Optional, Set, Tuple
@@ -63,6 +64,7 @@ class ScyllaWriter:
         self._ps_ts: Optional[PreparedStatement] = None
         self._ps_partition: Optional[PreparedStatement] = None
         self._ps_latest: Optional[PreparedStatement] = None
+        self._prepare_lock = threading.Lock()
 
     @classmethod
     def connect(cls, host: str, port: int, keyspace: str) -> "ScyllaWriter":
@@ -82,24 +84,27 @@ class ScyllaWriter:
             self._session.execute(stmt.format(keyspace=self._keyspace))
 
     def _prepare_statements(self):
-        ks = self._keyspace
-        if self._ps_ts is None:
-            self._ps_ts = self._session.prepare(
-                f"INSERT INTO {ks}.ts_kv_cf "
-                "(entity_type, entity_id, key, partition, ts, bool_v, str_v, long_v, dbl_v, json_v) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-        if self._ps_partition is None:
-            self._ps_partition = self._session.prepare(
-                f"INSERT INTO {ks}.ts_kv_partitions_cf "
-                "(entity_type, entity_id, key, partition) VALUES (?, ?, ?, ?)"
-            )
-        if self._ps_latest is None:
-            self._ps_latest = self._session.prepare(
-                f"INSERT INTO {ks}.ts_kv_latest_cf "
-                "(entity_type, entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
+        if self._ps_ts is not None:
+            return
+        with self._prepare_lock:
+            ks = self._keyspace
+            if self._ps_ts is None:
+                self._ps_ts = self._session.prepare(
+                    f"INSERT INTO {ks}.ts_kv_cf "
+                    "(entity_type, entity_id, key, partition, ts, bool_v, str_v, long_v, dbl_v, json_v) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+            if self._ps_partition is None:
+                self._ps_partition = self._session.prepare(
+                    f"INSERT INTO {ks}.ts_kv_partitions_cf "
+                    "(entity_type, entity_id, key, partition) VALUES (?, ?, ?, ?)"
+                )
+            if self._ps_latest is None:
+                self._ps_latest = self._session.prepare(
+                    f"INSERT INTO {ks}.ts_kv_latest_cf "
+                    "(entity_type, entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
 
     def _build_ts_row(self, row: dict, entity_type: str, key_name: str, partition: int) -> tuple:
         """Build a tuple for ts_kv_cf INSERT from a pg row dict."""

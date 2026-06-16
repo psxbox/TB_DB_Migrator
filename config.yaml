@@ -12,6 +12,7 @@ scylla:
 
 migrator:
   batch_size: 5000
+  workers: 4
   live_sync_interval: 5.0
   lag_threshold_ms: 30000
   partitioning: MONTHS

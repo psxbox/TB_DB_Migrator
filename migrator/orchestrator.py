@@ -1,9 +1,11 @@
 import logging
 import signal
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import psycopg2
 import psycopg2.extras
@@ -25,11 +27,13 @@ class Orchestrator:
         reader: PgReader,
         writer: ScyllaWriter,
         tracker: ProgressTracker,
+        conn_factory: Optional[Callable] = None,
     ):
         self._cfg = config
         self._reader = reader
         self._writer = writer
         self._tracker = tracker
+        self._conn_factory = conn_factory
         self._stop = False
         self._partitioning = Partitioning(config.partitioning)
         self._partition_fn = lambda ts: compute_partition(ts, self._partitioning)
@@ -77,49 +81,83 @@ class Orchestrator:
         return entity_map, key_map
 
     def _phase1(self, entity_map, key_map):
-        """Historical migration: all ts_kv rows → ScyllaDB."""
-        logger.info("Phase 1: historical migration started")
+        """Historical migration: all ts_kv rows → ScyllaDB, using parallel workers."""
+        workers = self._cfg.workers if self._conn_factory else 1
+        logger.info("Phase 1: historical migration started (workers=%d)", workers)
+
         progress = self._tracker.progress
-        skip_until = progress.last_entity_id if progress.phase == "phase1" else None
-        skipping = skip_until is not None
+        completed = set(progress.completed_entities)
 
-        for entity_id_str in self._reader.iter_distinct_entities():
+        all_entities = list(self._reader.iter_distinct_entities())
+        pending = [e for e in all_entities if e not in completed]
+        logger.info(
+            "Phase 1: %d entities total, %d pending, %d already done",
+            len(all_entities), len(pending), len(completed),
+        )
+
+        lock = threading.Lock()
+
+        def process_entity(entity_id_str: str):
             if self._stop:
-                break
-
-            if skipping:
-                if entity_id_str == skip_until:
-                    skipping = False
-                continue
+                return
 
             entity_type = entity_map.get(entity_id_str)
             if entity_type is None:
                 logger.warning("entity_id %s not found in entity_map, skipping", entity_id_str)
-                self._tracker.update(skipped_rows=progress.skipped_rows + 1)
-                continue
+                with lock:
+                    progress.skipped_rows += 1
+                    self._tracker.update(skipped_rows=progress.skipped_rows)
+                return
 
-            batch_rows = []
-            for row in self._reader.iter_ts_kv_for_entity(entity_id_str, self._cfg.batch_size):
-                batch_rows.append(row)
-                if len(batch_rows) >= self._cfg.batch_size:
+            conn = self._conn_factory()
+            try:
+                reader = PgReader(conn)
+                batch_rows = []
+                for row in reader.iter_ts_kv_for_entity(entity_id_str, self._cfg.batch_size):
+                    if self._stop:
+                        break
+                    batch_rows.append(row)
+                    if len(batch_rows) >= self._cfg.batch_size:
+                        self._flush_ts_batch(batch_rows, entity_type, key_map)
+                        with lock:
+                            progress.migrated_rows += len(batch_rows)
+                            self._tracker.update(migrated_rows=progress.migrated_rows)
+                        batch_rows = []
+
+                if batch_rows and not self._stop:
                     self._flush_ts_batch(batch_rows, entity_type, key_map)
-                    progress.migrated_rows += len(batch_rows)
-                    self._tracker.update(
-                        last_entity_id=entity_id_str,
-                        migrated_rows=progress.migrated_rows,
-                    )
-                    batch_rows = []
+                    with lock:
+                        progress.migrated_rows += len(batch_rows)
 
-            if batch_rows:
-                self._flush_ts_batch(batch_rows, entity_type, key_map)
-                progress.migrated_rows += len(batch_rows)
+                if not self._stop:
+                    with lock:
+                        progress.completed_entities.append(entity_id_str)
+                        self._tracker.update(
+                            migrated_rows=progress.migrated_rows,
+                            last_entity_id=entity_id_str,
+                            completed_entities=progress.completed_entities,
+                        )
+            finally:
+                conn.close()
 
-            self._tracker.update(
-                last_entity_id=entity_id_str,
-                migrated_rows=progress.migrated_rows,
-            )
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(process_entity, eid): eid for eid in pending}
+                for future in as_completed(futures):
+                    if self._stop:
+                        for f in futures:
+                            f.cancel()
+                        break
+                    exc = future.exception()
+                    if exc:
+                        logger.error("Entity %s failed: %s", futures[future], exc, exc_info=exc)
+        else:
+            for eid in pending:
+                if self._stop:
+                    break
+                process_entity(eid)
 
-        # Migrate latest values
+        # Migrate latest values (single-threaded sequential scan)
         logger.info("Phase 1: migrating ts_kv_latest")
         latest_by_type = defaultdict(list)
         for row in self._reader.iter_ts_kv_latest():
@@ -142,7 +180,7 @@ class Orchestrator:
         self._tracker.update(phase="live_sync")
 
     def _flush_ts_batch(self, rows, entity_type, key_map):
-        """Write a batch and its partitions to ScyllaDB."""
+        """Write a batch and its partitions to ScyllaDB. Thread-safe."""
         partitions = self._writer.write_ts_batch(
             rows, entity_type, key_map, self._partition_fn, self._cast_fn
         )

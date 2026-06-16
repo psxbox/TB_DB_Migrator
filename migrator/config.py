@@ -24,6 +24,7 @@ class MigratorConfig:
     pg: PgConfig = field(default_factory=PgConfig)
     scylla: ScyllaConfig = field(default_factory=ScyllaConfig)
     batch_size: int = 5000
+    workers: int = 4
     live_sync_interval: float = 5.0
     lag_threshold_ms: int = 30000
     partitioning: str = "MONTHS"
@@ -57,6 +58,7 @@ def load_config(path: str = "config.yaml") -> MigratorConfig:
         pg=pg,
         scylla=scylla,
         batch_size=mg_d.get("batch_size", 5000),
+        workers=mg_d.get("workers", 4),
         live_sync_interval=mg_d.get("live_sync_interval", 5.0),
         lag_threshold_ms=mg_d.get("lag_threshold_ms", 30000),
         partitioning=mg_d.get("partitioning", "MONTHS"),

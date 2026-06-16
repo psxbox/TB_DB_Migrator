@@ -77,8 +77,9 @@ def init_schema(ctx):
 @click.option("--historical-only", is_flag=True, help="Run Phase 0+1 only (skip live sync)")
 @click.option("--cast-strings", is_flag=True, help="Cast str_v to long_v/dbl_v if possible")
 @click.option("--partitioning", default=None, help="Partition strategy (MONTHS/DAYS/HOURS/...)")
+@click.option("--workers", default=None, type=int, help="Parallel entity workers (default: from config)")
 @click.pass_context
-def start(ctx, resume, historical_only, cast_strings, partitioning):
+def start(ctx, resume, historical_only, cast_strings, partitioning, workers):
     """Run full migration: Phase 0 (preload) -> Phase 1 (historical) -> Phase 2 (live sync)."""
     cfg = _get_config(ctx.obj["config_path"])
 
@@ -87,6 +88,8 @@ def start(ctx, resume, historical_only, cast_strings, partitioning):
         cfg.cast_strings = True
     if partitioning:
         cfg.partitioning = partitioning
+    if workers is not None:
+        cfg.workers = workers
 
     console.print(
         Panel(
@@ -95,7 +98,8 @@ def start(ctx, resume, historical_only, cast_strings, partitioning):
             f"  ScyllaDB   : {cfg.scylla.host}:{cfg.scylla.port}/{cfg.scylla.keyspace}\n"
             f"  Partitioning: {cfg.partitioning}\n"
             f"  Cast strings: {cfg.cast_strings}\n"
-            f"  Batch size  : {cfg.batch_size}",
+            f"  Batch size  : {cfg.batch_size}\n"
+            f"  Workers     : {cfg.workers}",
             title="Migration Config",
         )
     )
@@ -116,7 +120,10 @@ def start(ctx, resume, historical_only, cast_strings, partitioning):
         reader = PgReader(pg_conn)
         tracker = ProgressTracker(cfg.checkpoint_file)
 
-        orch = Orchestrator(cfg, reader, writer, tracker)
+        def conn_factory():
+            return _connect_pg(cfg)
+
+        orch = Orchestrator(cfg, reader, writer, tracker, conn_factory=conn_factory)
         orch.run(historical_only=historical_only, resume=resume)
 
         console.print("[bold green]Migration complete![/bold green]")

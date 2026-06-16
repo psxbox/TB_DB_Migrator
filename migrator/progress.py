@@ -1,7 +1,7 @@
 import json
 import os
-from dataclasses import dataclass, asdict
-from typing import Optional
+from dataclasses import dataclass, asdict, field
+from typing import List, Optional
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Progress:
     started_at: str = ""
     partitioning: str = "MONTHS"
     cast_strings: bool = False
+    completed_entities: List[str] = field(default_factory=list)
 
 
 class ProgressTracker:
