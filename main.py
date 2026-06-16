@@ -110,6 +110,9 @@ def start(ctx, resume, historical_only, cast_strings, partitioning):
         writer = _connect_scylla(cfg)
         console.print("[green]✅ ScyllaDB connected[/green]")
 
+        writer.init_schema()
+        console.print("[green]✅ ScyllaDB schema verified[/green]")
+
         reader = PgReader(pg_conn)
         tracker = ProgressTracker(cfg.checkpoint_file)
 
