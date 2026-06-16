@@ -10,6 +10,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
+    networks:
+      - migrator-net
 
   tb-migrator:
     build:
@@ -25,14 +27,21 @@ services:
       SCYLLA_PORT: "9042"
       SCYLLA_KEYSPACE: thingsboard
     depends_on:
-      postgres:
-        condition: service_started
       scylladb:
         condition: service_healthy
     volumes:
       - ./migration_progress.json:/app/migration_progress.json
     stdin_open: true
     tty: true
+    networks:
+      - migrator-net
+      - tb_ce_new_default
+
+networks:
+  migrator-net:
+    driver: bridge
+  tb_ce_new_default:
+    external: true
 
 volumes:
   scylla-data:
