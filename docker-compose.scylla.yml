@@ -3,9 +3,11 @@ services:
     image: scylladb/scylla:2026.1
     container_name: scylladb
     ports:
-      - "127.0.0.1:9042:9042"   # CQL — exposed so the migrator can run on the host (or a remote box)
+      - "127.0.0.1:9042:9042"   # host migrator uchun
     volumes:
       - scylla-data:/var/lib/scylla
+    networks:
+      - tb_net
     healthcheck:
       test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
       interval: 30s
@@ -14,3 +16,8 @@ services:
 
 volumes:
   scylla-data:
+
+networks:
+  tb_net:
+    external: true
+    name: tb_ce_new_default
