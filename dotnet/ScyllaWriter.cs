@@ -148,12 +148,39 @@ public class ScyllaWriter
         await Task.WhenAll(tasks);
     }
 
-    private async Task ExecuteWithSemAsync(IStatement stmt, CancellationToken ct)
+    private async Task ExecuteWithSemAsync(IStatement stmt, CancellationToken ct, int maxRetries = 6)
     {
-        await _writeSem.WaitAsync(ct);
-        try   { await _session.ExecuteAsync(stmt); }
-        finally { _writeSem.Release(); }
+        int attempt = 0;
+        while (true)
+        {
+            await _writeSem.WaitAsync(ct);
+            try
+            {
+                await _session.ExecuteAsync(stmt);
+                return;
+            }
+            catch (Exception ex) when (IsTransient(ex) && attempt < maxRetries)
+            {
+                // semaphore released in finally; sleep below
+            }
+            finally
+            {
+                _writeSem.Release();
+            }
+
+            int delayMs = 200 * (1 << attempt); // 400 800 1600 3200 6400 12800
+            Console.Error.WriteLine(
+                $"[WARN] ScyllaDB write timeout (attempt {attempt + 1}/{maxRetries}), retry in {delayMs}ms");
+            await Task.Delay(delayMs, ct);
+            attempt++;
+        }
     }
+
+    private static bool IsTransient(Exception ex) =>
+        ex is WriteTimeoutException
+            or ReadTimeoutException
+            or NoHostAvailableException
+            or OperationTimedOutException;
 
     private static TsRow TryCast(TsRow row)
     {
