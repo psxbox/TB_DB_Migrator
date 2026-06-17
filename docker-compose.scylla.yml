@@ -17,7 +17,7 @@ services:
 volumes:
   scylla-data:
     external: true
-    name: tb_db_migrator_scylla-data
+    name: thingsboard-scylla-data
 
 networks:
   tb_net:
