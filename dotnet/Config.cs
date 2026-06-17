@@ -31,7 +31,7 @@ public class MigratorConfig
     public int    Workers          { get; set; } = 4;
 
     [YamlMember(Alias = "scylla_concurrency")]
-    public int    ScyllaConcurrency { get; set; } = 128;
+    public int    ScyllaConcurrency { get; set; } = 64;
 
     [YamlMember(Alias = "live_sync_interval")]
     public double LiveSyncInterval  { get; set; } = 5.0;
