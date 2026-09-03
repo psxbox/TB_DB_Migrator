@@ -41,6 +41,47 @@ public class Orchestrator
     }
 
     // -------------------------------------------------------------------------
+    // Partition runner — migrate one validated partition (entity-type resolved
+    // via existing entity map). Stream batches sequentially (ordering matters
+    // for keyset pagination), write batches in parallel via ScyllaWriter
+    // semaphore + Task.WhenAll.
+    // -------------------------------------------------------------------------
+    public async Task RunPartitionAsync(string partition, long deltaFromTs, int workers, CancellationToken ct)
+    {
+        var (keyMap, hybridMode) = await _reader.LoadKeyMapAsync(ct);
+        var entityMap = await _reader.LoadEntityMapAsync(ct);
+        long pgCount = await _reader.CountPartitionAsync(partition, ct);
+        _tracker.Update(p => p.Partitions[partition] = new PartitionProgress(
+            "migrating", pgCount, p.Partitions.TryGetValue(partition, out var prev) ? prev.ScyllaCount : 0,
+            p.Partitions.TryGetValue(partition, out var pr) ? pr.DumpFile : null, false, false, 0));
+        long written = 0, maxTs = deltaFromTs;
+        // Stream batches sequentially (ordering matters for keyset pagination),
+        // writes are parallel via Task.WhenAll + ScyllaWriter semaphore.
+        await foreach (var batch in _reader.StreamPartitionAsync(partition, deltaFromTs, keyMap, hybridMode, _cfg.Migrator.PartitionBatch, ct))
+        {
+            var byType = new Dictionary<string, List<TsRow>>();
+            foreach (var row in batch)
+            {
+                if (!entityMap.TryGetValue(row.EntityId, out var et)) continue;
+                if (!byType.ContainsKey(et)) byType[et] = [];
+                byType[et].Add(row);
+                if (row.Ts > maxTs) maxTs = row.Ts;
+            }
+            var tasks = byType.Select(async kv =>
+            {
+                var parts = await _scylla.WriteTsBatchAsync(kv.Value, kv.Key, _cfg.Migrator.Partitioning, _cfg.Migrator.CastStrings, ct);
+                await _scylla.WritePartitionsAsync(parts, ct);
+            });
+            await Task.WhenAll(tasks);
+            written += batch.Count;
+            long w = written, m = maxTs;
+            _tracker.Update(p => p.Partitions[partition] = p.Partitions[partition] with { ScyllaCount = w, MaxTs = m });
+            _tracker.Update(p => p.MigratedRows += batch.Count);
+        }
+        _tracker.Update(p => p.Partitions[partition] = p.Partitions[partition] with { State = "migrated" });
+    }
+
+    // -------------------------------------------------------------------------
     // Phase 0 — load maps
     // -------------------------------------------------------------------------
     private async Task<(Dictionary<string,string> entityMap,
