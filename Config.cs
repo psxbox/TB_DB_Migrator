@@ -44,6 +44,12 @@ public class MigratorConfig
     [YamlMember(Alias = "cast_strings")]
     public bool   CastStrings       { get; set; } = false;
 
+    [YamlMember(Alias = "partition_batch")]
+    public int    PartitionBatch   { get; set; } = 5000;
+
+    [YamlMember(Alias = "verify_sample_size")]
+    public int    VerifySampleSize { get; set; } = 1000;
+
     [YamlMember(Alias = "checkpoint_file")]
     public string CheckpointFile    { get; set; } = "migration_progress.json";
 }

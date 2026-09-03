@@ -19,3 +19,5 @@ migrator:
   partitioning: MONTHS
   cast_strings: false
   checkpoint_file: migration_progress.json
+  partition_batch: 5000
+  verify_sample_size: 1000
