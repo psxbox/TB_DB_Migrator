@@ -1,0 +1,72 @@
+services:
+  postgres-new:
+    image: postgres:18
+    container_name: postgres-new
+    mem_limit: 512m
+    mem_reservation: 256m
+    command: postgres -c shared_buffers=128MB -c effective_cache_size=256MB -c maintenance_work_mem=64MB -c max_connections=100
+    environment:
+      POSTGRES_DB: ${NEW_PG_DB:-thingsboard}
+      POSTGRES_USER: ${NEW_PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${NEW_PG_PASSWORD:-postgres}
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - tb-pg-new-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d thingsboard || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  scylladb:
+    image: scylladb/scylla:2026.1
+    container_name: scylladb-new
+    mem_limit: 1400m
+    command: --smp 1 --memory 1G --overprovisioned 1
+    ports:
+      - "127.0.0.1:9042:9042"
+    volumes:
+      - tb-scylla-data:/var/lib/scylla
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  tb-pe:
+    image: thingsboard/tb-pe-node:3.4.1PE
+    container_name: tb-pe-new
+    profiles: ["tb"]
+    mem_limit: 3g
+    mem_reservation: 2g
+    depends_on:
+      postgres-new:
+        condition: service_healthy
+      scylladb:
+        condition: service_healthy
+    environment:
+      JAVA_OPTS: "-Xms1G -Xmx2G"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-new:5432/${NEW_PG_DB:-thingsboard}
+      SPRING_DATASOURCE_USERNAME: ${NEW_PG_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${NEW_PG_PASSWORD:-postgres}
+      DATABASE_TS_TYPE: cassandra
+      TS_KV_PARTITIONING: MONTHS
+      CASSANDRA_URL: scylladb:9042
+      CASSANDRA_CLUSTER_NAME: "TB Cluster"
+      CASSANDRA_USE_CREDENTIALS: "false"
+      CASSANDRA_KEYSPACE_NAME: thingsboard
+      TB_LICENSE_SECRET: ${TB_LICENSE_SECRET:-}
+      TB_LICENSE_INSTANCE_DATA_FILE: ${TB_LICENSE_INSTANCE_DATA_FILE:-}
+    ports:
+      - "8080:8080"
+      - "1883:1883"
+      - "5683:5683/udp"
+
+volumes:
+  tb-pg-new-data:
+    external: true
+    name: tb-pg-new-data
+  tb-scylla-data:
+    external: true
+    name: tb-scylla-data
