@@ -208,6 +208,9 @@ Migratsiya papkasiga o'ting va ScyllaDB ni ishga tushiring:
 ```bash
 cd ~/projects/TB_DB_Migrator
 
+# External volume bir marta yaratiladi (ma'lumotlar compose'dan tashqarida saqlanadi)
+docker volume create thingsboard-scylla-data
+
 docker compose -f docker-compose.scylla.yml up -d
 ```
 
