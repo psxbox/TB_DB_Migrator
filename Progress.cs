@@ -15,7 +15,17 @@ public class Progress
     [JsonPropertyName("watermark_ts")]       public long    WatermarkTs        { get; set; }
     [JsonPropertyName("last_entity_id")]     public string? LastEntityId       { get; set; }
     [JsonPropertyName("completed_entities")] public List<string> CompletedEntities { get; set; } = [];
+    [JsonPropertyName("partitions")] public Dictionary<string, PartitionProgress> Partitions { get; set; } = [];
 }
+
+public record PartitionProgress(
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("pg_count")] long PgCount,
+    [property: JsonPropertyName("scylla_count")] long ScyllaCount,
+    [property: JsonPropertyName("dump_file")] string? DumpFile,
+    [property: JsonPropertyName("verified")] bool Verified,
+    [property: JsonPropertyName("dropped")] bool Dropped,
+    [property: JsonPropertyName("max_ts")] long MaxTs);
 
 public class ProgressTracker
 {
