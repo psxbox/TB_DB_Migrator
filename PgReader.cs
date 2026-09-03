@@ -12,6 +12,8 @@ public record TsRow(
     double? DblV,
     string? JsonV);
 
+public record PartitionInfo(string Name, long MinTs, long MaxTs, long Count, long SizeBytes);
+
 public class PgReader : IAsyncDisposable
 {
     private readonly NpgsqlConnection _conn;
@@ -343,6 +345,88 @@ public class PgReader : IAsyncDisposable
         await using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM ts_kv";
         return (long)(await cmd.ExecuteScalarAsync(ct))!;
+    }
+
+    // --- Partitions ---------------------------------------------------------
+
+    public async Task<List<PartitionInfo>> ListPartitionsAsync(CancellationToken ct = default)
+    {
+        var names = new List<string>();
+        await using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent = 'ts_kv'::regclass ORDER BY 1";
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            while (await rdr.ReadAsync(ct))
+                names.Add(rdr.GetString(0));
+        }
+        var result = new List<PartitionInfo>(names.Count);
+        foreach (var name in names)
+        {
+            await using var cmd = _conn.CreateCommand();
+            // identifier cannot be parameterised — validate against pg_inherits list above
+            cmd.CommandText = $"SELECT COALESCE(MIN(ts),0), COALESCE(MAX(ts),0), COUNT(*), pg_total_relation_size('\"{name}\"') FROM \"{name}\"";
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            await rdr.ReadAsync(ct);
+            result.Add(new PartitionInfo(name, rdr.GetInt64(0), rdr.GetInt64(1), rdr.GetInt64(2), rdr.GetInt64(3)));
+        }
+        return result;
+    }
+
+    public async Task<long> CountPartitionAsync(string partition, CancellationToken ct = default)
+    {
+        await using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM \"{partition}\"";
+        return (long)(await cmd.ExecuteScalarAsync(ct))!;
+    }
+
+    public async IAsyncEnumerable<List<TsRow>> StreamPartitionAsync(
+        string partition,
+        long deltaFromTs,
+        Dictionary<int, string> keyMap,
+        bool hybridMode,
+        int batchSize,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        (long, Guid, string)? last = null;
+        while (true)
+        {
+            await using var cmd = _conn.CreateCommand();
+            string keySel = hybridMode ? "key" : "key::text";
+            if (last is null)
+            {
+                cmd.CommandText =
+                    $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                    $"FROM \"{partition}\" WHERE ts > $1 ORDER BY ts, entity_id, key LIMIT $2";
+                cmd.Parameters.AddWithValue(deltaFromTs);
+                cmd.Parameters.AddWithValue(batchSize);
+            }
+            else
+            {
+                cmd.CommandText =
+                    $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                    $"FROM \"{partition}\" WHERE (ts, entity_id, key) > ($1,$2,$3) " +
+                    "ORDER BY ts, entity_id, key LIMIT $4";
+                cmd.Parameters.AddWithValue(last.Value.Item1);
+                cmd.Parameters.AddWithValue(last.Value.Item2);
+                // hybrid: key column is int — parse back; text mode: raw string
+                if (hybridMode && int.TryParse(last.Value.Item3, out int kid))
+                    cmd.Parameters.AddWithValue(kid);
+                else
+                    cmd.Parameters.AddWithValue(last.Value.Item3);
+                cmd.Parameters.AddWithValue(batchSize);
+            }
+
+            var batch = new List<TsRow>(batchSize);
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            while (await rdr.ReadAsync(ct))
+            {
+                var row = hybridMode ? ReadRowIntKey(rdr, keyMap) : ReadRow(rdr, keyMap, false);
+                batch.Add(row);
+                last = (row.Ts, Guid.Parse(row.EntityId), rdr[1].ToString()!);
+            }
+            if (batch.Count > 0) yield return batch;
+            if (batch.Count < batchSize) yield break;
+        }
     }
 
     // --- Helpers ------------------------------------------------------------
