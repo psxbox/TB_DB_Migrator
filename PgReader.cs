@@ -31,13 +31,15 @@ public class PgReader : IAsyncDisposable
     }
 
     // --- Entity map ---------------------------------------------------------
+    // TB 3.4 (official migrator RelatedEntitiesParser) entity tables.
+    // ts_kv.ts_kv_dictionary based hybrid mode: ts_kv.key is integer FK.
 
     private static readonly string[] EntityTables =
     [
         "device", "customer", "tenant", "asset", "alarm", "dashboard",
         "rule_chain", "rule_node", "tb_user", "entity_view", "widgets_bundle",
-        "widget_type", "tenant_profile", "device_profile", "api_usage_state",
-        "edge", "ota_package", "rpc"
+        "widget_type", "tenant_profile", "device_profile", "asset_profile",
+        "api_usage_state"
     ];
 
     private static readonly Dictionary<string, string> TableToType = new()
@@ -48,8 +50,8 @@ public class PgReader : IAsyncDisposable
         ["tb_user"] = "USER", ["entity_view"] = "ENTITY_VIEW",
         ["widgets_bundle"] = "WIDGETS_BUNDLE", ["widget_type"] = "WIDGET_TYPE",
         ["tenant_profile"] = "TENANT_PROFILE", ["device_profile"] = "DEVICE_PROFILE",
-        ["api_usage_state"] = "API_USAGE_STATE", ["edge"] = "EDGE",
-        ["ota_package"] = "OTA_PACKAGE", ["rpc"] = "RPC"
+        ["asset_profile"] = "ASSET_PROFILE",
+        ["api_usage_state"] = "API_USAGE_STATE"
     };
 
     public async Task<Dictionary<string, string>> LoadEntityMapAsync(CancellationToken ct = default)
@@ -71,10 +73,13 @@ public class PgReader : IAsyncDisposable
     }
 
     // --- Key map ------------------------------------------------------------
+    // TB 3.4: ts_kv_dictionary (key varchar PK, key_id serial UNIQUE).
+    // ts_kv.key + ts_kv_latest.key are integer FK -> key_id.
+    // TB 4.x renamed it to key_dictionary — try 3.4 name first.
 
     public async Task<(Dictionary<int, string> Map, bool Hybrid)> LoadKeyMapAsync(CancellationToken ct = default)
     {
-        foreach (var table in new[] { "key_dictionary", "ts_kv_dictionary" })
+        foreach (var table in new[] { "ts_kv_dictionary", "key_dictionary" })
         {
             try
             {
@@ -212,11 +217,78 @@ public class PgReader : IAsyncDisposable
     }
 
     // --- Live sync (ts > watermark) -----------------------------------------
+    // TB 3.4: ts_kv.key is integer — numeric comparison must stay numeric.
+    // Comparing key::text breaks ordering ('10' < '2'), so hybrid and
+    // pure-SQL modes use separate queries.
 
     public async IAsyncEnumerable<TsRow> StreamTsKvByTsAsync(
         long watermarkTs,
         Dictionary<int, string> keyMap,
         bool hybridMode,
+        int batchSize,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (hybridMode)
+            await foreach (var row in StreamTsKvByTsHybridAsync(watermarkTs, keyMap, batchSize, ct))
+                yield return row;
+        else
+            await foreach (var row in StreamTsKvByTsTextAsync(watermarkTs, keyMap, batchSize, ct))
+                yield return row;
+    }
+
+    private async IAsyncEnumerable<TsRow> StreamTsKvByTsHybridAsync(
+        long watermarkTs,
+        Dictionary<int, string> keyMap,
+        int batchSize,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        (long, Guid, int)? last = null;
+        while (true)
+        {
+            await using var cmd = _conn.CreateCommand();
+            if (last is null)
+            {
+                cmd.CommandText =
+                    "SELECT entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                    "FROM ts_kv WHERE ts > $1 ORDER BY ts, entity_id, key LIMIT $2";
+                cmd.Parameters.AddWithValue(watermarkTs);
+                cmd.Parameters.AddWithValue(batchSize);
+            }
+            else
+            {
+                cmd.CommandText =
+                    "SELECT entity_id, key, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                    "FROM ts_kv WHERE (ts, entity_id, key) > ($1,$2,$3) " +
+                    "ORDER BY ts, entity_id, key LIMIT $4";
+                cmd.Parameters.AddWithValue(last.Value.Item1);
+                cmd.Parameters.AddWithValue(last.Value.Item2);
+                cmd.Parameters.AddWithValue(last.Value.Item3);
+                cmd.Parameters.AddWithValue(batchSize);
+            }
+
+            int count = 0;
+            int lastKey = 0;
+            Guid lastEid = Guid.Empty;
+            long lastTs = 0;
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            while (await rdr.ReadAsync(ct))
+            {
+                var row = ReadRowIntKey(rdr, keyMap);
+                lastEid = Guid.Parse(row.EntityId);
+                lastKey = rdr.GetInt32(1);
+                lastTs  = row.Ts;
+                count++;
+                yield return row;
+            }
+            if (count == 0) yield break;
+            last = (lastTs, lastEid, lastKey);
+            if (count < batchSize) yield break;
+        }
+    }
+
+    private async IAsyncEnumerable<TsRow> StreamTsKvByTsTextAsync(
+        long watermarkTs,
+        Dictionary<int, string> keyMap,
         int batchSize,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -251,7 +323,7 @@ public class PgReader : IAsyncDisposable
             await using var rdr = await cmd.ExecuteReaderAsync(ct);
             while (await rdr.ReadAsync(ct))
             {
-                var row = ReadRow(rdr, keyMap, hybridMode);
+                var row = ReadRow(rdr, keyMap, hybridMode: false);
                 lastEid = Guid.Parse(row.EntityId);
                 lastKey = rdr.GetString(1); // raw key (before name resolution) for pagination
                 lastTs  = row.Ts;
@@ -274,6 +346,21 @@ public class PgReader : IAsyncDisposable
     }
 
     // --- Helpers ------------------------------------------------------------
+
+    private static TsRow ReadRowIntKey(NpgsqlDataReader rdr, Dictionary<int, string> keyMap)
+    {
+        int keyId = rdr.GetInt32(1);
+        string keyName = keyMap.TryGetValue(keyId, out var name) ? name : keyId.ToString();
+        return new TsRow(
+            EntityId: rdr.GetGuid(0).ToString(),
+            Key:      keyName,
+            Ts:       rdr.GetInt64(2),
+            BoolV:    rdr.IsDBNull(3) ? null : rdr.GetBoolean(3),
+            StrV:     rdr.IsDBNull(4) ? null : rdr.GetString(4),
+            LongV:    rdr.IsDBNull(5) ? null : rdr.GetInt64(5),
+            DblV:     rdr.IsDBNull(6) ? null : rdr.GetDouble(6),
+            JsonV:    rdr.IsDBNull(7) ? null : rdr.GetString(7));
+    }
 
     private static TsRow ReadRow(NpgsqlDataReader rdr, Dictionary<int, string> keyMap, bool hybridMode)
     {

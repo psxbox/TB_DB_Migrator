@@ -1,8 +1,8 @@
 # TB_DB_Migrator — ThingsBoard PostgreSQL → ScyllaDB ko'chirish vositasi
 
-> **Versiya:** 1.1 | **ThingsBoard:** 4.x CE | **Til:** O'zbek (Latin)
+> **Versiya:** 2.0 (`tb-3.4` branch) | **ThingsBoard:** 3.4.1 PE | **Til:** O'zbek (Latin)
 >
-> **Ishlash modeli:** ScyllaDB — Docker'da, migrator (Python) — host (remote Linux) mashinada to'g'ridan-to'g'ri.
+> **Ishlash modeli:** ScyllaDB — Docker'da, migrator (.NET 10) — host (remote Linux) mashinada to'g'ridan-to'g'ri.
 
 ---
 
@@ -15,7 +15,7 @@
 5. [Migratsiya bosqichlari](#5-migratsiya-bosqichlari)
    - [5.1 Mavjud TB stack holatini tekshirish](#51-mavjud-tb-stack-holatini-tekshirish)
    - [5.2 ScyllaDB ni Docker'da ko'tarish](#52-scylladb-ni-dockerda-kotarish)
-   - [5.3 Python muhitini tayyorlash](#53-python-muhitini-tayyorlash)
+   - [5.3 .NET muhitini tayyorlash](#53-net-muhitini-tayyorlash)
    - [5.4 Ulanishlarni sozlash](#54-ulanishlarni-sozlash)
    - [5.5 Migratsiyani screen ichida ishga tushirish](#55-migratsiyani-screen-ichida-ishga-tushirish)
    - [5.6 Progress kuzatish](#56-progress-kuzatish)
@@ -30,7 +30,7 @@
 
 ## 1. Kirish
 
-**TB_DB_Migrator** — ThingsBoard CE ning vaqt seriyali ma'lumotlarini (timeseries) PostgreSQL ma'lumotlar bazasidan ScyllaDB ga ko'chirish uchun mo'ljallangan amaliy vosita.
+**TB_DB_Migrator** — ThingsBoard PE ning vaqt seriyali ma'lumotlarini (timeseries) PostgreSQL ma'lumotlar bazasidan ScyllaDB ga ko'chirish uchun mo'ljallangan amaliy vosita.
 
 ### Nima qiladi?
 
@@ -45,9 +45,33 @@
 - ScyllaDB ga o'tib, yozish/o'qish tezligini va gorizontal masshtablashni yaxshilash kerak bo'lganda
 - PostgreSQL da saqlash hajmi muammo bo'lganda
 
-### Key dictionary (TB 4.x)
+### Key dictionary (TB 3.4.1 PE)
 
-ThingsBoard CE 4.x da kalitlar lug'ati jadvali `key_dictionary` deb nomlanadi (eski versiyalarda `ts_kv_dictionary`). Migrator avtomatik ravishda avval `key_dictionary` ni, keyin `ts_kv_dictionary` ni sinab ko'radi. Agar ikkalasi ham bo'lmasa (toza-SQL rejimi), `ts_kv.key` ustunini to'g'ridan-to'g'ri ishlatadi.
+ThingsBoard 3.4.1 PE da kalitlar lug'ati jadvali `ts_kv_dictionary` deb nomlanadi:
+
+```sql
+ts_kv_dictionary (key varchar(255) PK, key_id serial UNIQUE)
+```
+
+`ts_kv.key` va `ts_kv_latest.key` — integer (`key_id` ga FK). Migrator `ts_kv_dictionary` ni o'qiydi va `key_id → key` xaritasini tuzadi (rasmiy `DictionaryParser` dagi kabi). Fallback sifatida TB 4.x dagi `key_dictionary` ham sinab ko'riladi. Lug'at topilmasa, `ts_kv.key` to'g'ridan-to'g'ri ishlatiladi (toza-SQL rejimi).
+
+### Manba sxemasi (TB 3.4.1 PE, tasdiqlangan)
+
+```text
+ts_kv:            PARTITIONED TABLE, RANGE (ts) — 277 ta partitsiya
+  entity_id uuid NOT NULL, key integer NOT NULL, ts bigint NOT NULL,
+  bool_v, str_v varchar(10000000), long_v, dbl_v, json_v
+  PK: (entity_id, key, ts)
+
+ts_kv_dictionary: key varchar(255) PK, key_id serial UNIQUE
+
+ts_kv_latest:     entity_id uuid NOT NULL, key integer NOT NULL, ts bigint NOT NULL, ...
+  PK: (entity_id, key)
+```
+
+### Rasmiy migrator bilan farq
+
+ThingsBoard `release-3.4` dagi rasmiy tool (`tools/.../migrator`: `MigratorTool`, `PgCaMigrator`, `DictionaryParser`, `RelatedEntitiesParser`, `WriterBuilder`) **offline** ishlaydi: `pg_dump` → SSTable generatsiya (`CQLSSTableWriter`) → fayllarni qo'lda `data/thingsboard` ga ko'chirish → `nodetool compact` → hybrid rejimga o'tish. Bu vosita esa **online** ishlaydi: PostgreSQL dan to'g'ridan-to'g'ri o'qiydi, ScyllaDB ga CQL orqali yozadi, TB ishlayotgan paytda live-sync qiladi. Entity ro'yxati, `ts_kv_dictionary` formati, partition (oy boshi, UTC) va `str_v → dbl_v` cast mantig'i rasmiy tool bilan bir xil.
 
 ---
 
@@ -61,8 +85,8 @@ REMOTE LINUX SERVER
   │                                                       │
   │  ┌──────────────┐   ┌───────────────┐                 │
   │  │ thingsboard  │   │   postgres    │                 │
-  │  │  tb-node CE  │◄──│   :5432       │                 │
-  │  │   4.x        │   │  (TB stack)   │                 │
+  │  │  tb-node PE  │◄──│   :5432       │                 │
+  │  │   3.4.1      │   │  (TB stack)   │                 │
   │  └──────────────┘   └───────┬───────┘                 │
   │                             │                         │
   │  ┌──────────────┐           │                         │
@@ -74,13 +98,14 @@ REMOTE LINUX SERVER
             │ yozish (CQL)        │ o'qish (SQL)
             │                     │
        ┌────┴─────────────────────┴────┐
-       │   HOST PYTHON (venv)           │
-       │   python main.py start         │
-       │   migrator/                    │
+       │   HOST .NET 10 (publish)         │
+       │   dotnet tbmigrator.dll start    │
+       │   PgReader / ScyllaWriter /      │
+       │   Orchestrator                   │
        └────────────────────────────────┘
 ```
 
-**Ishlash modeli:** ScyllaDB Docker konteynerida ishlaydi va CQL porti (`9042`) host'ga ochiladi. Migrator esa host (remote Linux) mashinasida to'g'ridan-to'g'ri Python orqali ishlaydi — PostgreSQL dan o'qiydi, ScyllaDB ga yozadi. Bu Docker image build qilish zaruratini yo'q qiladi va loglarni to'g'ridan-to'g'ri ko'rsatadi.
+**Ishlash modeli:** ScyllaDB Docker konteynerida ishlaydi va CQL porti (`9042`) host'ga ochiladi. Migrator esa host (remote Linux) mashinasida to'g'ridan-to'g'ri .NET orqali ishlaydi — PostgreSQL dan o'qiydi, ScyllaDB ga yozadi. `dotnet publish -c Release` bilan bitta self-contained papka olinadi, loglar to'g'ridan-to'g'ri ko'rinadi.
 
 **Migratsiya fazalari:**
 
@@ -102,7 +127,7 @@ REMOTE LINUX SERVER
 | OS | Linux (Ubuntu 20.04+) | Ubuntu 22.04 LTS |
 | Docker | 24.0+ | so'nggi versiya |
 | Docker Compose | v2 (plugin) | v2.20+ |
-| Python | 3.9+ | 3.11+ |
+| .NET SDK | 10.0+ | so'nggi versiya |
 | RAM | **4 GB** | 8 GB+ |
 | Disk (ScyllaDB data) | PostgreSQL `ts_kv` hajmiga teng | 2x hajm (xavfsizlik uchun) |
 | CPU | 2 yadro | 4+ yadro |
@@ -114,8 +139,8 @@ REMOTE LINUX SERVER
 docker --version
 docker compose version
 
-# Python versiyasini tekshirish
-python3 --version
+# .NET SDK versiyasini tekshirish
+dotnet --version
 
 # Mavjud RAMni ko'rish
 free -h
@@ -136,7 +161,7 @@ Barcha migratsiya kodlari **local PC dan remote serverga** ko'chiriladi.
 
 ```bash
 # Local PC da bajarish:
-rsync -avz --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.venv' \
+rsync -avz --exclude='.git' --exclude='bin/' --exclude='obj/' \
   ./TB_DB_Migrator/ \
   user@remote-server:/opt/tb-migrator/
 ```
@@ -156,8 +181,9 @@ ssh user@remote-server "cd /opt && tar -xzf tb_migrator.tar.gz"
 ssh user@remote-server
 ls /opt/tb-migrator/
 # Ko'rinishi kerak:
-# docker-compose.scylla.yml  config.yaml
-# requirements.txt  main.py  migrator/
+# docker-compose.scylla.yml  config.yaml  TbMigrator.csproj
+# Program.cs  PgReader.cs  ScyllaWriter.cs  Orchestrator.cs
+# Partition.cs  Progress.cs  Config.cs  Dockerfile
 ```
 
 ---
@@ -180,16 +206,18 @@ docker compose ps
 # Kutilgan natija:
 # NAME              STATUS
 # postgres          Up
-# thingsboard-ce    Up
+# tb-pe             Up
 ```
 
 ```bash
 # PostgreSQL ga ulanib ts_kv jadvalini tekshirish
 docker exec -it postgres psql -U postgres -d thingsboard -c \
   "SELECT COUNT(*) FROM ts_kv;"
+docker exec -it postgres psql -U postgres -d thingsboard -c \
+  "SELECT COUNT(*) FROM ts_kv_dictionary;"
 ```
 
-Agar jadval mavjud va qatorlar bor bo'lsa, migratsiyaga tayyor.
+Agar jadvallar mavjud va qatorlar bor bo'lsa, migratsiyaga tayyor. `ts_kv.key` — integer (`key_id` ga FK), `ts_kv` — `RANGE (ts)` bo'yicha partitsiyalangan jadval.
 
 > **Muhim:** Migrator host'da ishlagani uchun PostgreSQL host'dan ko'rinishi kerak. Agar TB postgres konteyneri 5432 portni host'ga ochmagan bo'lsa:
 > - postgres konteyneriga `ports: ["127.0.0.1:5432:5432"]` qo'shing, **yoki**
@@ -223,16 +251,22 @@ docker logs -f scylladb
 
 > CQL porti `127.0.0.1:9042` ga bind qilingan — faqat host'dan (localhost) ulanish mumkin, tashqaridan emas.
 
-### 5.3 Python muhitini tayyorlash
+### 5.3 .NET muhitini tayyorlash
 
-Host'da virtual muhit yarating va kutubxonalarni o'rnating (bir marta):
+Host'da .NET SDK o'rnating va loyihani build qiling (bir marta):
 
 ```bash
 cd /opt/tb-migrator
 
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+dotnet --version   # 10.0+ bo'lishi kerak
+dotnet build TbMigrator.csproj -c Release
+```
+
+Yoki publish qilib bitta papka oling:
+
+```bash
+dotnet publish TbMigrator.csproj -c Release -o /opt/tb-migrator/publish
+cd /opt/tb-migrator/publish
 ```
 
 ### 5.4 Ulanishlarni sozlash
@@ -252,25 +286,24 @@ export SCYLLA_PORT=9042
 export SCYLLA_KEYSPACE=thingsboard
 ```
 
-> Schema (keyspace + jadvallar) avtomatik yaratiladi — `start` buyrug'i ishga tushganda `init-schema` ni o'zi chaqiradi. Alohida bajarish ham mumkin: `python main.py init-schema`.
+> Schema (keyspace + jadvallar) avtomatik yaratiladi — `start` buyrug'i ishga tushganda `init-schema` ni o'zi chaqiradi. Alohida bajarish ham mumkin: `dotnet bin/Release/net10.0/tbmigrator.dll init-schema`.
 
 ### 5.5 Migratsiyani screen ichida ishga tushirish
 
 > **Muhim:** SSH ulanishi uzilsa, migratsiya to'xtamasligi uchun `screen` (yoki `tmux`) ichida ishga tushiring.
 
-Yangi `screen` sessiyasi oching va venv ni faollashtiring:
+Yangi `screen` sessiyasi oching:
 
 ```bash
 screen -S migration
 
 cd /opt/tb-migrator
-source .venv/bin/activate
 ```
 
 Migratsiyani ishga tushiring:
 
 ```bash
-python main.py start
+dotnet bin/Release/net10.0/tbmigrator.dll start
 ```
 
 **Screen dan chiqish (migratsiya davom etishi bilan):** `Ctrl+A`, keyin `D`
@@ -281,61 +314,55 @@ python main.py start
 
 #### Qo'shimcha parametrlar bilan ishga tushirish
 
-Faqat historical ma'lumotlarni ko'chirish (live sync va switchover yo'q):
+Faqat historical ma'lumotlarni ko'chirish (live sync yo'q):
 
 ```bash
-python main.py start --historical-only
+dotnet bin/Release/net10.0/tbmigrator.dll start --historical-only
 ```
 
-String qiymatlarni raqamga aylantirish bilan:
+Worker sonini o'zgartirish bilan:
 
 ```bash
-python main.py start --cast-strings
-```
-
-Partition strategiyasini o'zgartirish bilan (standart: MONTHS):
-
-```bash
-python main.py start --partitioning DAYS
+dotnet bin/Release/net10.0/tbmigrator.dll start --workers 8
 ```
 
 ### 5.6 Progress kuzatish
 
 #### status buyrug'i orqali
 
-Boshqa SSH sessiyasida (venv faollashtirilgan holda):
+Boshqa SSH sessiyasida:
 
 ```bash
 cd /opt/tb-migrator
-source .venv/bin/activate
-python main.py status
+dotnet bin/Release/net10.0/tbmigrator.dll status
 ```
 
 Natija ko'rinishi:
 
-```
-          Migration Status
- ──────────────────────────────────────
-  Phase          │ phase1
-  Started at     │ 2026-01-15 10:23:45
-  Partitioning   │ MONTHS
-  Cast strings   │ False
-  Migrated rows  │ 1,234,567
-  Skipped rows   │ 42
-  Last entity ID │ 550e8400-e29b-41d4-...
-  Watermark      │ 2026-01-15 09:58:12 UTC
+```text
+┌────────────────────┬──────────────────────────────┐
+│ Field              │ Value                        │
+├────────────────────┼──────────────────────────────┤
+│ Phase              │ phase1                       │
+│ Started At         │ 2026-01-15T10:23:45+00:00    │
+│ Migrated Rows      │ 1,234,567                    │
+│ Skipped Rows       │ 42                           │
+│ Completed Entities │ 128                          │
+│ Last Entity        │ 550e8400-e29b-41d4-...       │
+│ Partitioning       │ MONTHS                       │
+│ Cast Strings       │ False                        │
+└────────────────────┴──────────────────────────────┘
 ```
 
 > `Migrated rows` har bir batch (5000 qator) yozilgandan so'ng yangilanadi — katta entity ko'chayotganda ham hisoblagich o'sib boradi.
 
-#### Log fayli orqali
+#### Konsol loglari orqali
+
+Migrator barcha holat (`[INFO]`, `[WARN]`, `[STATUS]`) xabarlarini stderr ga yozadi:
 
 ```bash
-# Oxirgi loglarni ko'rish
-tail -n 50 /opt/tb-migrator/migration_errors.log
-
-# Real vaqtda kuzatish
-tail -f /opt/tb-migrator/migration_errors.log
+# screen sessiyasiga qaytib jonli logni ko'rish
+screen -r migration
 ```
 
 `screen -r migration` orqali jonli konsol chiqishini ham ko'rish mumkin.
@@ -355,10 +382,10 @@ Switchover paytida ThingsBoard konteyneri ScyllaDB ga ulanishi kerak. ScyllaDB h
 ```bash
 # ThingsBoard tarmog'i nomini aniqlash
 docker network ls | grep thingsboard
-# masalan: tb_ce_new_default
+# masalan: tb_pe_default (sizda boshqacha bo'lishi mumkin)
 
 # ScyllaDB konteynerini shu tarmoqqa ulash
-docker network connect tb_ce_new_default scylladb
+docker network connect tb_pe_default scylladb
 ```
 
 Endi ThingsBoard konteyneri `scylladb:9042` orqali ulana oladi.
@@ -367,16 +394,16 @@ Endi ThingsBoard konteyneri `scylladb:9042` orqali ulana oladi.
 
 ```bash
 cd /opt/thingsboard
-docker compose stop thingsboard-ce
+docker compose stop tb-pe
 ```
 
 **Qadam 3: docker-compose.yml ni tahrirlash**
 
-`thingsboard-ce` servisining `environment` bo'limiga quyidagi o'zgaruvchilarni qo'shing:
+`tb-pe` servisining `environment` bo'limiga quyidagi o'zgaruvchilarni qo'shing:
 
 ```yaml
 services:
-  thingsboard-ce:
+  tb-pe:
     environment:
       # ... mavjud o'zgaruvchilar ...
       DATABASE_TS_TYPE: cassandra
@@ -387,19 +414,19 @@ services:
       CASSANDRA_KEYSPACE_NAME: thingsboard
 ```
 
-> **Diqqat:** `TS_KV_PARTITIONING` migratsiyada ishlatilgan partition strategiyasiga mos bo'lishi kerak (standart: `MONTHS`).
+> **Diqqat:** `TS_KV_PARTITIONING` migratsiyada ishlatilgan partition strategiyasiga mos bo'lishi kerak (standart: `MONTHS` — rasmiy tool ham shuni ishlatadi).
 
 **Qadam 4: ThingsBoard ni qayta ishga tushirish**
 
 ```bash
 cd /opt/thingsboard
-docker compose up -d thingsboard-ce
+docker compose up -d tb-pe
 ```
 
 **Qadam 5: Loglar orqali muvaffaqiyatli ishga tushishini tasdiqlash**
 
 ```bash
-docker logs -f thingsboard-ce | grep -i "started\|error\|cassandra"
+docker logs -f tb-pe | grep -i "started\|error\|cassandra"
 ```
 
 Cassandra bilan muvaffaqiyatli ulanganda quyidagicha log ko'rinadi:
@@ -444,6 +471,8 @@ scylla:
 
 migrator:
   batch_size: 5000
+  workers: 4
+  scylla_concurrency: 64
   live_sync_interval: 5.0
   lag_threshold_ms: 30000
   partitioning: MONTHS
@@ -464,9 +493,11 @@ migrator:
 | `scylla.port` | `9042` | ScyllaDB CQL port |
 | `scylla.keyspace` | `thingsboard` | ScyllaDB keyspace nomi |
 | `migrator.batch_size` | `5000` | Bir so'rovda o'qiladigan/yoziladigan qatorlar soni |
+| `migrator.workers` | `4` | Parallel entity worker soni (`--workers N` bilan override) |
+| `migrator.scylla_concurrency` | `64` | ScyllaDB ga parallel yozish limiti |
 | `migrator.live_sync_interval` | `5.0` | Live sync polling oralig'i (soniya) |
 | `migrator.lag_threshold_ms` | `30000` | Switchover uchun ruxsat etilgan maksimal lag (ms) |
-| `migrator.partitioning` | `MONTHS` | Partition strategiyasi: `MONTHS`, `DAYS`, `HOURS`, `INDEFINITE` |
+| `migrator.partitioning` | `MONTHS` | Partition strategiyasi: `MONTHS`, `DAYS`, `HOURS`, `YEARS`, `MINUTES`, `INDEFINITE` |
 | `migrator.cast_strings` | `false` | `str_v` ni `long_v`/`dbl_v` ga aylantirish |
 | `migrator.checkpoint_file` | `migration_progress.json` | Checkpoint fayli yo'li |
 
@@ -474,9 +505,11 @@ migrator:
 
 | Qiymat | Tavsif | Qachon ishlatish |
 |--------|--------|-----------------|
-| `MONTHS` | Har oy alohida partition (standart) | Ko'p hollarda mos |
+| `MONTHS` | Har oy alohida partition (standart, rasmiy tool bilan bir xil) | Ko'p hollarda mos |
 | `DAYS` | Har kun alohida partition | Yuqori yozish tezligi bo'lganda |
 | `HOURS` | Har soat alohida partition | Juda yuqori yozish tezligi bo'lganda |
+| `MINUTES` | Har daqiqa alohida partition | Test uchun |
+| `YEARS` | Har yil alohida partition | Kam yozish tezligi bo'lganda |
 | `INDEFINITE` | Bitta partition, partition yo'q | Kam ma'lumot bo'lganda |
 
 > **Muhim:** `TS_KV_PARTITIONING` ThingsBoard env o'zgaruvchisi `migrator.partitioning` bilan bir xil bo'lishi shart.
@@ -496,46 +529,32 @@ cat /opt/tb-migrator/migration_progress.json
 ### Davom ettirish
 
 ```bash
-screen -r migration
-# yoki yangi screen sessiyasi:
 screen -S migration
-cd /opt/tb-migrator && source .venv/bin/activate
+cd /opt/tb-migrator
 
-python main.py start --resume
+dotnet bin/Release/net10.0/tbmigrator.dll start --resume
 ```
 
 ### Holat tekshirish
 
 ```bash
-python main.py status
+dotnet bin/Release/net10.0/tbmigrator.dll status
 ```
 
-`Last entity ID` maydoni — oxirgi muvaffaqiyatli ko'chirilgan entity. Resume paytida migrator shu nuqtadan davom etadi.
+`Last Entity` maydoni — oxirgi muvaffaqiyatli ko'chirilgan entity. Resume paytida migrator shu nuqtadan davom etadi.
 
 ### Checkpoint faylini o'chirish (noldan boshlash)
 
 ```bash
 rm -f /opt/tb-migrator/migration_progress.json
-python main.py start
+dotnet bin/Release/net10.0/tbmigrator.dll start
 ```
 
 ---
 
 ## 8. Xatoliklarni ko'rish
 
-Barcha xato va ogohlantirishlar `migration_errors.log` fayliga (host'da, ishchi papkada) yoziladi.
-
-### Log faylini ko'rish
-
-```bash
-cat /opt/tb-migrator/migration_errors.log
-
-# Oxirgi 100 qatorni ko'rish
-tail -n 100 /opt/tb-migrator/migration_errors.log
-
-# Real vaqtda kuzatish
-tail -f /opt/tb-migrator/migration_errors.log
-```
+Barcha xato va ogohlantirishlar konsol (stderr) ga yoziladi — `screen -r migration` orqali ko'ring.
 
 ### Tez-tez uchraydigan xatolar
 
@@ -543,10 +562,9 @@ tail -f /opt/tb-migrator/migration_errors.log
 |------|-------|--------|
 | `Connection refused` (PostgreSQL) | `PG_HOST` noto'g'ri yoki PG host'dan ko'rinmaydi | postgres 5432 ni host'ga oching yoki `PG_HOST` ni konteyner IP ga sozlang |
 | `Connection refused` (ScyllaDB) | ScyllaDB hali tayyor emas | ScyllaDB `healthy` bo'lguncha kuting (`docker compose -f docker-compose.scylla.yml ps`) |
-| `Keyspace ... does not exist` | Schema yaratilmagan | `python main.py init-schema` ni bajaring (yoki `start` qayta yaratadi) |
-| `ModuleNotFoundError` | venv faollashtirilmagan | `source .venv/bin/activate` |
+| `Keyspace ... does not exist` | Schema yaratilmagan | `dotnet bin/Release/net10.0/tbmigrator.dll init-schema` ni bajaring (yoki `start` o'zi yaratadi) |
 | `Out of memory` | ScyllaDB ga RAM yetishmayapti | Serverda bo'sh RAM ni tekshiring (`free -h`) |
-| `Timeout` / sekin yozish | Yuk oshib ketgan | `config.yaml` da `batch_size` ni kamaytiring |
+| `Timeout` / sekin yozish | Yuk oshib ketgan | `config.yaml` da `batch_size` ni kamaytiring yoki `scylla_concurrency` ni tushiring |
 
 ### ScyllaDB ichida tekshirish
 
@@ -577,7 +595,7 @@ Bu ThingsBoard ning mo'ljallangan arxitekturasi: entities va attributes — Post
 
 ### Ishonchli yozish (data-loss yo'q)
 
-Migrator har bir INSERT ni alohida, lekin parallel (`execute_concurrent`, concurrency 32) yuboradi — bu ScyllaDB uchun to'g'ri usul. Xato bergan qatorlar faqat o'zi qayta urinib ko'riladi (exponential backoff bilan), shuning uchun timeout paytida ham hech qanday qator yo'qolmaydi.
+Migrator har bir INSERT ni alohida, lekin parallel (`scylla_concurrency`, standart 64) yuboradi — bu ScyllaDB uchun to'g'ri usul. `WriteTimeoutException` va shunga o'xshash vaqtinchalik xatolar exponential backoff bilan 6 marta qayta uriniladi, shuning uchun timeout paytida ham hech qanday qator yo'qolmaydi.
 
 ### Tez o'qish (keyset pagination)
 
@@ -614,4 +632,4 @@ Switchover muvaffaqiyatli bo'lgandan so'ng ThingsBoard to'liq cassandra rejimida
 
 ---
 
-*TB_DB_Migrator — BlueStar loyihasi uchun ishlab chiqilgan. ThingsBoard CE 4.x bilan sinovdan o'tkazilgan.*
+*TB_DB_Migrator — BlueStar loyihasi uchun ishlab chiqilgan. ThingsBoard 3.4.1 PE bilan ishlashga mo'ljallangan (`tb-3.4` branch). Rasmiy migrator (`thingsboard/release-3.4`, `tools/.../migrator`) offline SSTable usulida ishlaydi — bu vosita online CQL usulida ishlaydi.*
