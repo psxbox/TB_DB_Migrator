@@ -597,3 +597,13 @@ Switchover muvaffaqiyatli bo'lgandan so'ng ThingsBoard to'liq cassandra rejimida
 ---
 
 *TB_DB_Migrator — BlueStar loyihasi uchun ishlab chiqilgan. ThingsBoard 3.4.1 PE bilan ishlashga mo'ljallangan (`tb-3.4` branch). Rasmiy migrator (`thingsboard/release-3.4`, `tools/.../migrator`) offline SSTable usulida ishlaydi — bu vosita online CQL usulida ishlaydi.*
+
+## 10. Disk-cheklangan migratsiya (partition sikl)
+
+Volume'lar: `docker volume create tb-pg-new-data && docker volume create tb-scylla-data`
+Yangi stack: `docker compose -f docker-compose.new-stack.yml up -d postgres-new scylladb`
+Schema + non-ts_kv (pipe, oraliq faylsiz):
+`docker exec $OLD_PG pg_dump -U postgres -d thingsboard --schema-only -Fc > ~/backup/schema.dump`
+`docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc --exclude-table-data='ts_kv*' > ~/backup/nontskv.dump`
+Har partition: dump (`docker exec $OLD_PG pg_dump -Fc -t <part> > ~/backup/<part>.dump`) -> `tbmigrator start --partition <part>` -> `tbmigrator verify --partition <part>` -> `tbmigrator drop --partition <part> --dump-file ~/backup/<part>.dump --verified`
+Hot partition DROP faqat switchover + `scripts/tb-api-check.sh` (`TB_USER/TB_PASS/DEVICE_ID/START_TS`) `ALL_CHECKS_PASSED` dan keyin.
