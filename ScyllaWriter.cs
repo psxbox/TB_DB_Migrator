@@ -52,6 +52,8 @@ public class ScyllaWriter
         _writeSem = new SemaphoreSlim(concurrency, concurrency);
     }
 
+    public ISession Session => _session;
+
     public void InitSchema()
     {
         foreach (var tpl in Schema)
