@@ -11,7 +11,7 @@
 1. [Kirish](#1-kirish)
 2. [Arxitektura](#2-arxitektura)
 3. [Talablar](#3-talablar)
-4. [Fayllarni remote serverga yuborish](#4-fayllarni-remote-serverga-yuborish)
+4. [Loyihani serverga olish (git clone)](#4-loyihani-serverga-olish-git-clone)
 5. [Migratsiya bosqichlari](#5-migratsiya-bosqichlari)
    - [5.1 Mavjud TB stack holatini tekshirish](#51-mavjud-tb-stack-holatini-tekshirish)
    - [5.2 ScyllaDB ni Docker'da ko'tarish](#52-scylladb-ni-dockerda-kotarish)
@@ -83,29 +83,30 @@ REMOTE LINUX SERVER
 
   ┌─────────────────────── Docker ───────────────────────┐
   │                                                       │
-  │  ┌──────────────┐   ┌───────────────┐                 │
-  │  │ thingsboard  │   │   postgres    │                 │
-  │  │  tb-node PE  │◄──│   :5432       │                 │
-  │  │   3.4.1      │   │  (TB stack)   │                 │
-  │  └──────────────┘   └───────┬───────┘                 │
-  │                             │                         │
-  │  ┌──────────────┐           │                         │
-  │  │  scylladb     │ 127.0.0.1:9042                      │
-  │  │  (alohida     │           │                         │
-  │  │   compose)    │           │                         │
-  │  └──────▲───────┘           │                         │
-  └─────────┼────────────────────┼─────────────────────────┘
-            │ yozish (CQL)        │ o'qish (SQL)
-            │                     │
-       ┌────┴─────────────────────┴────┐
-       │   HOST .NET 10 (publish)         │
-       │   dotnet tbmigrator.dll start    │
-       │   PgReader / ScyllaWriter /      │
-       │   Orchestrator                   │
-       └────────────────────────────────┘
+  │  ┌───────────────┐   ┌──────────────┐                 │
+  │  │   postgres    │   │   scylladb   │                 │
+  │  │    :5432      │   │    :9042     │                 │
+  │  │  (TB stack)   │   │  (alohida    │                 │
+  │  └───────┬───────┘   │   compose)   │                 │
+  │          │           └──────▲───────┘                 │
+  └──────────┼──────────────────┼─────────────────────────┘
+             │ o'qish (SQL)      │ yozish (CQL)
+             │                   │
+  ┌──────────┴───────────────────┴────┐
+  │  HOST (to'g'ridan-to'g'ri)         │
+  │  ┌─────────────────────────────┐  │
+  │  │ ThingsBoard PE 3.4.1        │  │
+  │  │ (service, systemctl)        │  │
+  │  └─────────────────────────────┘  │
+  │  ┌─────────────────────────────┐  │
+  │  │ Migrator (.NET 10)          │  │
+  │  │ ~/projects/TB_DB_Migrator/  │  │
+  │  │ dotnet tbmigrator.dll start │  │
+  │  └─────────────────────────────┘  │
+  └───────────────────────────────────┘
 ```
 
-**Ishlash modeli:** ScyllaDB Docker konteynerida ishlaydi va CQL porti (`9042`) host'ga ochiladi. Migrator esa host (remote Linux) mashinasida to'g'ridan-to'g'ri .NET orqali ishlaydi — PostgreSQL dan o'qiydi, ScyllaDB ga yozadi. `dotnet publish -c Release` bilan bitta self-contained papka olinadi, loglar to'g'ridan-to'g'ri ko'rinadi.
+**Ishlash modeli:** PostgreSQL (Docker) va ScyllaDB (Docker, alohida compose) portlari host'ga ochilgan. ThingsBoard host OS ga to'g'ridan-to'g'ri o'rnatilgan (service). Migrator ham host'da .NET orqali ishlaydi — PostgreSQL dan o'qiydi (`localhost:5432`), ScyllaDB ga yozadi (`localhost:9042`). `dotnet publish -c Release` bilan bitta papka olinadi, loglar to'g'ridan-to'g'ri ko'rinadi.
 
 **Migratsiya fazalari:**
 
@@ -153,38 +154,20 @@ df -h
 
 ---
 
-## 4. Fayllarni remote serverga yuborish
+## 4. Loyihani serverga olish (git clone)
 
-Barcha migratsiya kodlari **local PC dan remote serverga** ko'chiriladi.
-
-### rsync orqali yuborish
+Serverda `~/projects` ga clone qiling va `tb-3.4` branch'ga o'ting:
 
 ```bash
-# Local PC da bajarish:
-rsync -avz --exclude='.git' --exclude='bin/' --exclude='obj/' \
-  ./TB_DB_Migrator/ \
-  user@remote-server:/opt/tb-migrator/
+mkdir -p ~/projects
+cd ~/projects
+
+git clone https://github.com/psxbox/TB_DB_Migrator.git
+cd TB_DB_Migrator
+git checkout tb-3.4
 ```
 
-### scp orqali yuborish (alternativa)
-
-```bash
-# Arxivlab yuborish:
-tar -czf tb_migrator.tar.gz TB_DB_Migrator/
-scp tb_migrator.tar.gz user@remote-server:/opt/
-ssh user@remote-server "cd /opt && tar -xzf tb_migrator.tar.gz"
-```
-
-### Remote serverda papkani tekshirish
-
-```bash
-ssh user@remote-server
-ls /opt/tb-migrator/
-# Ko'rinishi kerak:
-# docker-compose.scylla.yml  config.yaml  TbMigrator.csproj
-# Program.cs  PgReader.cs  ScyllaWriter.cs  Orchestrator.cs
-# Partition.cs  Progress.cs  Config.cs  Dockerfile
-```
+Keyingi barcha buyruqlar shu papkada bajariladi: `~/projects/TB_DB_Migrator/`.
 
 ---
 
@@ -194,19 +177,14 @@ Barcha quyidagi buyruqlar **remote serverda** bajariladi (SSH orqali kirgandan k
 
 ### 5.1 Mavjud TB stack holatini tekshirish
 
-Migratsiyadan oldin mavjud ThingsBoard stack ishlayotganini tasdiqlang:
+Migratsiyadan oldin PostgreSQL (Docker) va ThingsBoard (host'da service) ishlayotganini tasdiqlang:
 
 ```bash
-# TB papkasiga o'tish (docker-compose.yml joylashgan joy)
-cd /opt/thingsboard
+# PostgreSQL konteyneri
+docker ps --filter name=postgres --format '{{.Names}} {{.Status}}'
 
-# Servislar holatini tekshirish
-docker compose ps
-
-# Kutilgan natija:
-# NAME              STATUS
-# postgres          Up
-# tb-pe             Up
+# ThingsBoard service (host'da o'rnatilgan)
+sudo systemctl status thingsboard --no-pager | head -5
 ```
 
 ```bash
@@ -219,16 +197,16 @@ docker exec -it postgres psql -U postgres -d thingsboard -c \
 
 Agar jadvallar mavjud va qatorlar bor bo'lsa, migratsiyaga tayyor. `ts_kv.key` — integer (`key_id` ga FK), `ts_kv` — `RANGE (ts)` bo'yicha partitsiyalangan jadval.
 
-> **Muhim:** Migrator host'da ishlagani uchun PostgreSQL host'dan ko'rinishi kerak. Agar TB postgres konteyneri 5432 portni host'ga ochmagan bo'lsa:
-> - postgres konteyneriga `ports: ["127.0.0.1:5432:5432"]` qo'shing, **yoki**
-> - `PG_HOST` ni postgres konteynerining IP manziliga sozlang (`docker inspect`).
+> **Muhim:** Migrator host'da ishlagani uchun PostgreSQL host'dan ko'rinishi kerak. Postgres Docker'da bo'lgani uchun 5432 port host'ga ochiq bo'lishi shart:
+> - `docker ps` da `0.0.0.0:5432->5432` yoki `127.0.0.1:5432->5432` ko'rinishi kerak;
+> - bo'lmasa postgres compose'ga `ports: ["127.0.0.1:5432:5432"]` qo'shing.
 
 ### 5.2 ScyllaDB ni Docker'da ko'tarish
 
 Migratsiya papkasiga o'ting va ScyllaDB ni ishga tushiring:
 
 ```bash
-cd /opt/tb-migrator
+cd ~/projects/TB_DB_Migrator
 
 docker compose -f docker-compose.scylla.yml up -d
 ```
@@ -256,7 +234,7 @@ docker logs -f scylladb
 Host'da .NET SDK o'rnating va loyihani build qiling (bir marta):
 
 ```bash
-cd /opt/tb-migrator
+cd ~/projects/TB_DB_Migrator
 
 dotnet --version   # 10.0+ bo'lishi kerak
 dotnet build TbMigrator.csproj -c Release
@@ -265,8 +243,8 @@ dotnet build TbMigrator.csproj -c Release
 Yoki publish qilib bitta papka oling:
 
 ```bash
-dotnet publish TbMigrator.csproj -c Release -o /opt/tb-migrator/publish
-cd /opt/tb-migrator/publish
+dotnet publish TbMigrator.csproj -c Release -o ~/projects/TB_DB_Migrator/publish
+cd ~/projects/TB_DB_Migrator/publish
 ```
 
 ### 5.4 Ulanishlarni sozlash
@@ -297,7 +275,7 @@ Yangi `screen` sessiyasi oching:
 ```bash
 screen -S migration
 
-cd /opt/tb-migrator
+cd ~/projects/TB_DB_Migrator
 ```
 
 Migratsiyani ishga tushiring:
@@ -333,7 +311,7 @@ dotnet bin/Release/net10.0/tbmigrator.dll start --workers 8
 Boshqa SSH sessiyasida:
 
 ```bash
-cd /opt/tb-migrator
+cd ~/projects/TB_DB_Migrator
 dotnet bin/Release/net10.0/tbmigrator.dll status
 ```
 
@@ -375,63 +353,46 @@ Phase 1 (historical) tugagandan so'ng, migrator avtomatik ravishda Phase 2 (live
 
 > **Bu bosqich ~60 soniya downtime beradi.** Foydalanuvchilar vaqtincha ThingsBoard ga kira olmaydi.
 
-Switchover paytida ThingsBoard konteyneri ScyllaDB ga ulanishi kerak. ScyllaDB host'ning `127.0.0.1` portiga bind qilingani uchun, uni ThingsBoard ning Docker tarmog'iga ulash kerak.
+ThingsBoard host OS ga to'g'ridan-to'g'ri o'rnatilgan, ScyllaDB esa Docker'da `127.0.0.1:9042` ga bind qilingan — shuning uchun TB `localhost:9042` orqali to'g'ridan-to'g'ri ulana oladi, Docker tarmog'ini ulash shart emas.
 
-**Qadam 1: ScyllaDB ni ThingsBoard tarmog'iga ulash**
-
-```bash
-# ThingsBoard tarmog'i nomini aniqlash
-docker network ls | grep thingsboard
-# masalan: tb_pe_default (sizda boshqacha bo'lishi mumkin)
-
-# ScyllaDB konteynerini shu tarmoqqa ulash
-docker network connect tb_pe_default scylladb
-```
-
-Endi ThingsBoard konteyneri `scylladb:9042` orqali ulana oladi.
-
-**Qadam 2: ThingsBoard ni to'xtatish**
+**Qadam 1: ThingsBoard ni to'xtatish**
 
 ```bash
-cd /opt/thingsboard
-docker compose stop tb-pe
+sudo systemctl stop thingsboard
 ```
 
-**Qadam 3: docker-compose.yml ni tahrirlash**
+**Qadam 2: `/etc/thingsboard/conf/thingsboard.conf` ni tahrirlash**
 
-`tb-pe` servisining `environment` bo'limiga quyidagi o'zgaruvchilarni qo'shing:
+Quyidagi qatorlarni qo'shing yoki yangilang:
 
-```yaml
-services:
-  tb-pe:
-    environment:
-      # ... mavjud o'zgaruvchilar ...
-      DATABASE_TS_TYPE: cassandra
-      TS_KV_PARTITIONING: MONTHS
-      CASSANDRA_URL: scylladb:9042
-      CASSANDRA_CLUSTER_NAME: TB Cluster
-      CASSANDRA_USE_CREDENTIALS: "false"
-      CASSANDRA_KEYSPACE_NAME: thingsboard
+```bash
+export DATABASE_TS_TYPE=cassandra
+export TS_KV_PARTITIONING=MONTHS
+export CASSANDRA_URL=127.0.0.1:9042
+export CASSANDRA_CLUSTER_NAME="TB Cluster"
+export CASSANDRA_USE_CREDENTIALS=false
+export CASSANDRA_KEYSPACE_NAME=thingsboard
 ```
 
 > **Diqqat:** `TS_KV_PARTITIONING` migratsiyada ishlatilgan partition strategiyasiga mos bo'lishi kerak (standart: `MONTHS` — rasmiy tool ham shuni ishlatadi).
 
-**Qadam 4: ThingsBoard ni qayta ishga tushirish**
+**Qadam 3: ThingsBoard ni qayta ishga tushirish**
 
 ```bash
-cd /opt/thingsboard
-docker compose up -d tb-pe
+sudo systemctl start thingsboard
 ```
 
-**Qadam 5: Loglar orqali muvaffaqiyatli ishga tushishini tasdiqlash**
+**Qadam 4: Loglar orqali muvaffaqiyatli ishga tushishini tasdiqlash**
 
 ```bash
-docker logs -f tb-pe | grep -i "started\|error\|cassandra"
+sudo journalctl -u thingsboard -f | grep -i "started\|error\|cassandra"
+# yoki
+tail -f /var/log/thingsboard/thingsboard.log | grep -i "started\|error\|cassandra"
 ```
 
 Cassandra bilan muvaffaqiyatli ulanganda quyidagicha log ko'rinadi:
 
-```
+```text
 ... ThingsBoard started in X seconds
 ```
 
@@ -523,14 +484,14 @@ Migrator progress ni `migration_progress.json` fayliga saqlaydi (har bir batch v
 ### Checkpoint fayli
 
 ```bash
-cat /opt/tb-migrator/migration_progress.json
+cat ~/projects/TB_DB_Migrator/migration_progress.json
 ```
 
 ### Davom ettirish
 
 ```bash
 screen -S migration
-cd /opt/tb-migrator
+cd ~/projects/TB_DB_Migrator
 
 dotnet bin/Release/net10.0/tbmigrator.dll start --resume
 ```
@@ -546,7 +507,7 @@ dotnet bin/Release/net10.0/tbmigrator.dll status
 ### Checkpoint faylini o'chirish (noldan boshlash)
 
 ```bash
-rm -f /opt/tb-migrator/migration_progress.json
+rm -f ~/projects/TB_DB_Migrator/migration_progress.json
 dotnet bin/Release/net10.0/tbmigrator.dll start
 ```
 
