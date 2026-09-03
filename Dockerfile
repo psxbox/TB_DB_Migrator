@@ -1,9 +1,15 @@
-FROM python:3.11-slim
-WORKDIR /app
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
 
-# Pip paketlarni COPY dan oldin o'rnatish — Docker cache dan foydalanish uchun
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Restore avval — Docker cache dan foydalanish uchun
+COPY TbMigrator.csproj .
+RUN dotnet restore
 
 COPY . .
-ENTRYPOINT ["python", "main.py"]
+RUN dotnet publish TbMigrator.csproj -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+WORKDIR /app
+COPY --from=build /app .
+COPY config.yaml .
+ENTRYPOINT ["dotnet", "tbmigrator.dll"]

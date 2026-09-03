@@ -1,8 +1,7 @@
-tests/
+bin/
+obj/
 docs/
 *.md
 migration_progress.json
 migration_errors.log
-__pycache__/
-*.pyc
 .git/

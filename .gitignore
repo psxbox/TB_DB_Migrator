@@ -1,25 +1,6 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.egg-info/
-*.egg
-dist/
-build/
-.eggs/
-
-# Virtual environments
-.venv/
-venv/
-env/
-.env
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
+# .NET build artifacts
+bin/
+obj/
 
 # Migration runtime files
 migration_progress.json
@@ -37,10 +18,3 @@ Thumbs.db
 
 # Docker
 *.tar
-
-# .NET build artifacts
-dotnet/bin/
-dotnet/obj/
-
-bin/
-obj/
