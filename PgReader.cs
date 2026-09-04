@@ -349,16 +349,23 @@ public class PgReader : IAsyncDisposable
 
     // --- Partitions ---------------------------------------------------------
 
-    public async Task<List<PartitionInfo>> ListPartitionsAsync(CancellationToken ct = default)
+    // Name-only listing — catalog query, instant. Use for --partition allowlist
+    // validation; ListPartitionsAsync also computes per-partition stats
+    // (COUNT/MIN/MAX full scans on every child) which takes minutes on large sets.
+    public async Task<List<string>> ListPartitionNamesAsync(CancellationToken ct = default)
     {
         var names = new List<string>();
-        await using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = "SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent = 'ts_kv'::regclass ORDER BY 1";
-            await using var rdr = await cmd.ExecuteReaderAsync(ct);
-            while (await rdr.ReadAsync(ct))
-                names.Add(rdr.GetString(0));
-        }
+        await using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent = 'ts_kv'::regclass ORDER BY 1";
+        await using var rdr = await cmd.ExecuteReaderAsync(ct);
+        while (await rdr.ReadAsync(ct))
+            names.Add(rdr.GetString(0));
+        return names;
+    }
+
+    public async Task<List<PartitionInfo>> ListPartitionsAsync(CancellationToken ct = default)
+    {
+        var names = await ListPartitionNamesAsync(ct);
         var result = new List<PartitionInfo>(names.Count);
         foreach (var name in names)
         {

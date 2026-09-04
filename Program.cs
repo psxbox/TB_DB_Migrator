@@ -68,8 +68,8 @@ internal static class Program
         var reader  = new PgReader(conn, hybridMode);
         if (part is not null)
         {
-            var names = await reader.ListPartitionsAsync(cts.Token);
-            if (!names.Any(p => p.Name == part))
+            var names = await reader.ListPartitionNamesAsync(cts.Token);
+            if (!names.Contains(part))
             {
                 Console.Error.WriteLine($"Unknown partition '{part}'. Use list-partitions to see valid names.");
                 return 1;
@@ -169,8 +169,9 @@ internal static class Program
         var reader = new PgReader(conn, false);
 
         // Validate --partition against server list before use in any SQL.
-        var names = await reader.ListPartitionsAsync();
-        if (!names.Any(p => p.Name == part))
+        // (name-only catalog query — full stats would scan every partition)
+        var names = await reader.ListPartitionNamesAsync();
+        if (!names.Contains(part))
         {
             Console.Error.WriteLine($"Unknown partition '{part}'. Use list-partitions to see valid names.");
             return 1;
@@ -305,8 +306,9 @@ internal static class Program
         var reader = new PgReader(conn, false);
 
         // Validate --partition against server list before use in any SQL.
-        var names = await reader.ListPartitionsAsync();
-        if (!names.Any(p => p.Name == part))
+        // (name-only catalog query — full stats would scan every partition)
+        var names = await reader.ListPartitionNamesAsync();
+        if (!names.Contains(part))
         {
             Console.Error.WriteLine($"Unknown partition '{part}'. Use list-partitions to see valid names.");
             return 1;
