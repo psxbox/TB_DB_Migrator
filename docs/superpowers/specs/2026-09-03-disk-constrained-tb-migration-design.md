@@ -123,12 +123,12 @@ Root diskni to'ldirmaslik uchun **barcha katta dump'lar pipe orqali** to'g'ridan
 1. `docker compose -f docker-compose.new-stack.yml up -d postgres-new` — yangi PG'ni ko'tarish, bo'sh `thingsboard` DB tayyor.
 2. Schema-only dump (barcha jadvallar, jumladan `ts_kv` bo'sh strukturasi, kichik fayl):
    `docker exec $OLD_PG pg_dump -U postgres -d thingsboard --schema-only -Fc > ~/backup/schema.dump`
-   Yangi PG'ga restore via stdin (pg_restore host'da yo'q; konteyner /tmp root diskda — katta dump'lar u yerga yozilmaydi): `docker exec -i postgres-new pg_restore -U postgres -d thingsboard --exit-on-error < ~/backup/schema.dump`.
+   Yangi PG'ga restore (pg_restore host'da yo'q — konteyner ichida): `docker cp ~/backup/schema.dump postgres-new:/tmp/schema.dump && docker exec postgres-new pg_restore -U postgres -d thingsboard --exit-on-error /tmp/schema.dump`.
 3. Data-only dump, `ts_kv` datasisiz (schema allaqachon bor) — pipe, oraliq faylsiz. Diqqat: `--exclude-table-data='ts_kv*'` patterni `ts_kv_dictionary` va `ts_kv_latest` ni ham chiqarib tashlaydi (psql pattern'da `*` — istalgan belgi), shuning uchun ikkita dump olinadi:
    `docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc --exclude-table-data='ts_kv*' > ~/backup/nontskv.dump`
    `docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc -t ts_kv_dictionary -t ts_kv_latest > ~/backup/dict-latest.dump`
    Birinchisi `ts_kv` parent + barcha child partition datalarini tashlab ketadi; ikkinchisi lug'at + latest'ni alohida oladi.
-   Restore via stdin: `docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error < ~/backup/<file>.dump` (`--disable-triggers` — `device_profile` ↔ `ota_package` circular FK uchun; streaming — konteyner /tmp root diskda).
+   Restore konteyner ichida: `docker cp` bilan `/tmp` ga ko'chirib, `docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/<file>.dump` (`--disable-triggers` — `device_profile` ↔ `ota_package` circular FK uchun).
    Fayl hajmi — `ts_kv` siz DB hajmiga teng (noma'lum; `~/backup/` /home'da bo'lgani uchun root to'lmaydi).
 4. Tekshiruv: yangi PG'da jadval soni (`\dt`), `ts_kv` bo'shligi (`SELECT count(*) FROM ts_kv` = 0), `ts_kv_dictionary` va `ts_kv_latest` count'larini eski bilan solishtirish.
 5. Delta-izoh: nusxa paytida eski TB ishlayotgani uchun entity/latest jadvallariga ozgina yozuv tushishi mumkin. Switchover paytida (eski TB stop qilingan) kichik jadvallar (`ts_kv_latest`, `ts_kv_dictionary`) bir marta qayta dump/restore qilinadi (tez, MB'lar darajasi). Katta jadvallar uchun takror shart emas.
@@ -144,7 +144,7 @@ Root diskni to'ldirmaslik uchun **barcha katta dump'lar pipe orqali** to'g'ridan
 3. Migrator bilan faqat shu partitionni ko'chirish (yangi CLI — 8-bo'lim):
    `tbmigrator start --partition <part> [--resume]`.
    Eski TB hali ishlayapti — hot partition'ga yangi yozuvlar tushishda davom etadi.
-4. Delta-pass: birinchi pass tugagach (yoki uzilgan bo'lsa), `tbmigrator start --partition <part> --resume` — checkpoint holatiga qarab cursor-davom yoki delta (`ts > max_ts`).
+4. Delta-pass: birinchi pass tugagach, `tbmigrator start --partition <part> --delta-from <pass1_max_ts>` — pass oralig'ida kelgan yozuvlarni ko'chirish.
 5. Verify (9-bo'lim): `tbmigrator verify --partition <part>` — PG count == Scylla count + sample. O'tmasa — DROP yo'q, log tahlil qilinadi.
 6. Verify o'tgach, partition hali DROP qilinmaydi (eski TB hali ishlayapti va hot partition'ga yozmoqda — 7-bo'lim switchover'dan keyin DROP).
 
@@ -152,7 +152,7 @@ Root diskni to'ldirmaslik uchun **barcha katta dump'lar pipe orqali** to'g'ridan
 
 1. `sudo systemctl stop thingsboard` (eski RPM TB) — shu paytdan eski PG frozen.
 2. Kichik jadvallar deltasini qayta nusxalash (`ts_kv_latest`, `ts_kv_dictionary`) — 5-bo'lim 5-qadam.
-3. Hot partition'ning so'nggi deltasini ko'chirish (`--resume` — tugallangan pass uchun delta rejimi).
+3. Hot partition'ning so'nggi deltasini ko'chirish (`--delta-from`).
 4. `docker compose -f docker-compose.new-stack.yml --profile tb up -d tb-pe`, log kuzatish (`docker logs -f tb-pe` — "ThingsBoard started").
 5. To'liq tekshiruv (Hammasi + API):
    - Login (UI + `POST /api/auth/login` 200).
@@ -183,15 +183,15 @@ Oxirgi partition faqat switchover tekshiruvi o'tgandan keyin DROP qilinadi (6.2-
 Mavjud kodda partition-scope yo'q (`PgReader` butun `ts_kv` ni entity-key bo'yicha stream qiladi). Yangi imkoniyatlar:
 
 - `PgReader.ListPartitionsAsync()`: `pg_inherits` dan child partitionlar + har birining `min(ts)/max(ts)/count(*)`. `status` da ko'rsatiladi.
-- `PgReader.StreamPartitionAsync(part, batchSize)`: `SELECT ... FROM <part>` (to'g'ridan child jadvaldan — parent scan emas, tez). Keyset pagination PK tartibida `ORDER BY entity_id, key, ts` — PK indeks `(entity_id, key, ts)` to'g'ridan xizmat qiladi (ts-boshli tartib indeks talab qiladi va har sahifada full scan berardi — O(N²)).
+- `PgReader.StreamPartitionAsync(part, batchSize)`: `SELECT ... FROM <part>` (to'g'ridan child jadvaldan — parent scan emas, tez). Keyset pagination `ORDER BY ts, entity_id, key`.
 - `PgReader.CountPartitionAsync(part)`: `SELECT count(*) FROM <part>`.
 - `ScyllaReader.CountPartitionAsync(partRange)`: verify uchun — yangi metod (`ScyllaWriter` ga reader qo'shiladi yoki alohida `ScyllaReader` class). `ts_kv_cf` da `partition` qiymatlari `Partition.Compute(ts)` bilan hisoblanadi; count PG bilan solishtiriladi.
 - CLI:
   - `tbmigrator list-partitions [--config]` — nom, min/max ts, count, size.
-  - `tbmigrator start --partition <part> [--delta-from <ts>] [--resume] [--workers N]` — faqat shu partition. `--resume` ikki rejim: uzilgan pass (state=migrating + cursor) — PK cursor'dan aynan davom; tugallangan pass (state=migrated) — delta `ts > max_ts` (yozilmagan qatorlar, counter aniq). Mavjud `--historical-only` saqlanadi.
+  - `tbmigrator start --partition <part> [--delta-from <ts>] [--resume] [--workers N]` — faqat shu partition. Mavjud `--historical-only` saqlanadi.
   - `tbmigrator verify --partition <part>` — exit code 0 = count match + sample match; 1 = mismatch.
   - `tbmigrator drop --partition <part> --dump-file <path> --verified` — uchala shart bajarilmasa rad etadi: dump fayl mavjud, verify o'tgan (checkpoint'da belgi), `--verified` flag berilgan. `DROP TABLE <part>;` ni eski PG'da bajaradi.
-- Checkpoint (`migration_progress.json`): `partitions: {<part>: {state, pg_count, scylla_count, dump_file, verified, dropped, max_ts, last_entity_id, last_key}}` maydonlari qo'shiladi; `last_entity_id/last_key/max_ts` — stream cursor, `--resume` undan aynan davom etadi (overlap/skip yo'q, hisoblagich aniq). Resume partition darajasida.
+- Checkpoint (`migration_progress.json`): `partitions: {<part>: {state, pg_count, scylla_count, dump_file, verified, dropped}}` maydoni qo'shiladi. Resume partition darajasida.
 - `config.yaml`: `migrator.partition_batch` (standart `batch_size` bilan bir xil) va `migrator.verify_sample_size` (standart 1000) qo'shiladi. Mavjud kalitlar o'zgarmaydi.
 
 ## 9. Verify + DROP safety gate
@@ -210,7 +210,7 @@ DROP — eng xavfli operatsiya. Qoida (istisnosiz):
 - Har qanday partition verify'siz DROP qilinmaydi — dump + eski PG'da data bor.
 - Switchover tekshiruvi o'tmasa: `docker compose --profile tb stop tb-pe`, `sudo systemctl start thingsboard` — eski stack joyida.
 - Yangi PG buzilsa: `~/backup/schema.dump` + `nontskv.dump` dan qayta restore.
-- DROP qilingan partition kerak bo'lsa: `docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction < ~/backup/<part>.dump` (yangi PG'ga) yoki eski PG'ga (`docker exec` orqali) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
+- DROP qilingan partition kerak bo'lsa: `docker cp ~/backup/<part>.dump postgres-new:/tmp/<part>.dump && docker exec postgres-new pg_restore -U postgres -d thingsboard /tmp/<part>.dump` (yangi PG'ga) yoki eski PG'ga (`docker exec` orqali) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
 
 ## 11. Risklar
 

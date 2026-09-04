@@ -56,9 +56,6 @@ services:
       CASSANDRA_CLUSTER_NAME: "TB Cluster"
       CASSANDRA_USE_CREDENTIALS: "false"
       CASSANDRA_KEYSPACE_NAME: thingsboard
-      # Pin TB 3.4 default explicitly: latest telemetry is served from the new PG
-      # ts_kv_latest (populated by pg_dump), not from ts_kv_latest_cf.
-      DATABASE_TS_LATEST_TYPE: "sql"
       TB_LICENSE_SECRET: ${TB_LICENSE_SECRET:-}
       TB_LICENSE_INSTANCE_DATA_FILE: ${TB_LICENSE_INSTANCE_DATA_FILE:-}
     ports:

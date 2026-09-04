@@ -25,10 +25,7 @@ public record PartitionProgress(
     [property: JsonPropertyName("dump_file")] string? DumpFile,
     [property: JsonPropertyName("verified")] bool Verified,
     [property: JsonPropertyName("dropped")] bool Dropped,
-    [property: JsonPropertyName("max_ts")] long MaxTs,
-    [property: JsonPropertyName("last_entity_id")] string? LastEntityId = null, // stream cursor for exact resume
-    [property: JsonPropertyName("last_key")] string? LastKey = null,           // raw key (physical column value)
-    [property: JsonPropertyName("last_ts")] long LastTs = 0);                  // cursor ts (batch[^1].Ts, PK order)
+    [property: JsonPropertyName("max_ts")] long MaxTs);
 
 public class ProgressTracker
 {
@@ -57,13 +54,5 @@ public class ProgressTracker
             mutate(Progress);
             File.WriteAllText(_file, JsonSerializer.Serialize(Progress, JsonOpts));
         }
-    }
-
-    // Thread-safe read for background readers (PrintLoop): the selector runs under
-    // the same lock Update holds, so it never enumerates Partitions while the
-    // migration thread replaces entries (Dictionary version-counter race).
-    public T Read<T>(Func<Progress, T> selector)
-    {
-        lock (_lock) return selector(Progress);
     }
 }

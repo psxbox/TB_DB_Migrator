@@ -304,8 +304,8 @@ Prinsip (spec 5-bo'lim): schema to'liq, data — `ts_kv*` partitionlarsiz. Barch
 
 ```bash
 docker exec $OLD_PG pg_dump -U postgres -d thingsboard --schema-only -Fc > ~/backup/schema.dump
-# restore via stdin — konteyner /tmp root diskda, u yerga dump yozilmaydi:
-docker exec -i postgres-new pg_restore -U postgres -d thingsboard --exit-on-error < ~/backup/schema.dump
+docker cp ~/backup/schema.dump postgres-new:/tmp/schema.dump
+docker exec postgres-new pg_restore -U postgres -d thingsboard --exit-on-error /tmp/schema.dump
 ```
 
 **Qadam 2 — data-only dump, `ts_kv` datasisiz** (schema allaqachon bor) — pipe, oraliq faylsiz:
@@ -315,10 +315,11 @@ docker exec -i postgres-new pg_restore -U postgres -d thingsboard --exit-on-erro
 # chiqarib tashlaydi (psql pattern'da * — istalgan belgi). Shuning uchun ikkita dump olinadi:
 docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc --exclude-table-data='ts_kv*' > ~/backup/nontskv.dump
 docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc -t ts_kv_dictionary -t ts_kv_latest > ~/backup/dict-latest.dump
-# pg_restore host'da yo'q — restore via stdin (streaming; konteyner /tmp root diskda —
-# katta dump'ni u yerga yozish TAQIQLANADI):
-docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error < ~/backup/nontskv.dump
-docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error < ~/backup/dict-latest.dump
+# pg_restore host'da yo'q — konteyner ichida bajariladi:
+docker cp ~/backup/nontskv.dump postgres-new:/tmp/nontskv.dump
+docker cp ~/backup/dict-latest.dump postgres-new:/tmp/dict-latest.dump
+docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/nontskv.dump
+docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/dict-latest.dump
 docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT setval('ts_kv_dictionary_key_id_seq', (SELECT max(key_id) FROM ts_kv_dictionary));"
 ```
 
@@ -327,7 +328,7 @@ Birinchi dump `ts_kv` parent + barcha child partition datalarini tashlab ketadi;
 **Qadam 3 — tekshiruv** (yangi PG'da):
 
 ```bash
-docker exec -i postgres-new pg_restore -U postgres -d thingsboard -l < ~/backup/nontskv.dump | grep -c "TABLE DATA"
+docker exec postgres-new pg_restore -U postgres -d thingsboard -l /tmp/nontskv.dump | grep -c "TABLE DATA"
 docker exec $OLD_PG psql -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv_dictionary;"
 docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv_dictionary;"   # eski bilan bir xil bo'lishi kerak
 docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv_latest;"   # eski bilan bir xil bo'lishi kerak
@@ -367,10 +368,10 @@ ls -lh ~/backup/<part>.dump
 dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --workers 2
 ```
 
-**Qadam 3 — davom ettirish/delta:** birinchi pass tugagach (yoki uzilgan bo'lsa) `--resume` ni ishga tushiring — u checkpoint holatiga qarab rejimni o'zi tanlaydi (qarang 12-bo'lim):
+**Qadam 3 — delta-pass:** birinchi pass tugagach, pass oralig'ida kelgan yozuvlarni ko'chirish (`MaxTs` ni checkpoint'dan oling):
 
 ```bash
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from <pass1_max_ts> --workers 2
 ```
 
 **Qadam 4 — verify** (10-bo'lim):
@@ -395,16 +396,17 @@ sudo systemctl stop thingsboard
 
 ```bash
 docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc -t ts_kv_latest -t ts_kv_dictionary > ~/backup/latest-delta.dump
+docker cp ~/backup/latest-delta.dump postgres-new:/tmp/latest-delta.dump
 # Yangi PG'da bu jadvallar allaqachon to'la — TRUNCATE qilib qayta yuklash (yangi TB hali ishlamaydi, xavfsiz):
 docker exec postgres-new psql -U postgres -d thingsboard -c 'TRUNCATE ts_kv_latest, ts_kv_dictionary;'
-docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error < ~/backup/latest-delta.dump
+docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/latest-delta.dump
 docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT setval('ts_kv_dictionary_key_id_seq', (SELECT max(key_id) FROM ts_kv_dictionary));"
 ```
 
 **Qadam 3 — hot partition'ning so'nggi deltasini ko'chirish:**
 
 ```bash
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from <last_max_ts> --workers 2
 dotnet bin/Release/net10.0/tbmigrator.dll verify --partition <part>
 ```
 
@@ -553,21 +555,13 @@ Migrator progress ni `migration_progress.json` fayliga saqlaydi (har bir batch'd
 
 ### Partition resume
 
-`--resume` checkpoint holatiga qarab rejimni o'zi tanlaydi:
-
-| Checkpoint holati | Rejim | Nega aniq |
-|---|---|---|
-| `migrating` + cursor | **Cursor** — uzilgan pass aynan cursor'dan davom etadi | Cursor'dan keyingi qatorlarning hech biri yozilmagan — overlap yo'q, o'tkazib yuborish yo'q, hisoblagich aniq |
-| `migrating`, cursor yo'q (eski checkpoint) | **Full re-run** | Idempotent upsert'lar, hisoblagich o'z-o'zini to'g'rilaydi |
-| `migrated` | **Delta** — `ts > max_ts` qatorlar | `max_ts` — yozilgan barcha qatorlarning max ts'i; undan katta ts'li qatorlar avval yozilmagan — overlap yo'q, hisoblagich aniq |
-
-Cursor checkpoint'da `last_entity_id`, `last_key`, `last_ts` maydonlarida saqlanadi (PK tartibidagi oxirgi yozilgan qator pozitsiyasi).
-
 ```bash
+# To'xtagan partition'ni davom ettirish (MaxTs checkpoint'da saqlangan)
 dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
-```
 
-Qo'lda delta (muqobil): `--delta-from <ts>` — `ts > qiymat` qatorlarni stream qiladi. Aniq natija uchun qiymat = checkpoint'dagi `max_ts` bo'lishi kerak (undan katta ts'li qatorlar avval yozilmagan).
+# Delta'dan boshlash (allaqachon ko'chgan qatorlarni o'tkazib yuborish)
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from <max_ts> --workers 2
+```
 
 ### Holat tekshirish
 
@@ -597,7 +591,7 @@ Barcha xato va ogohlantirishlar konsol (stderr) ga yoziladi — `screen -r migra
 | `Connection refused` (ScyllaDB) | ScyllaDB hali tayyor emas | ScyllaDB `healthy` bo'lguncha kuting (`docker compose -f docker-compose.new-stack.yml ps`) |
 | `Keyspace ... does not exist` | Schema yaratilmagan | `dotnet bin/Release/net10.0/tbmigrator.dll init-schema` ni bajaring (yoki `start` o'zi yaratadi) |
 | `Unknown partition` | `--partition` nomi xato | `list-partitions` bilan to'g'ri nomni oling |
-| `Count mismatch` (verify) | Delta yozuvlar kelgan yoki yozish tugamagan | `start --partition <part> --resume` (cursor'dan aynan davom), keyin `verify` ni takrorlang |
+| `Count mismatch` (verify) | Delta yozuvlar kelgan yoki yozish tugamagan | Delta-pass (`--delta-from`) ni qayta bajaring, keyin `verify` ni takrorlang |
 | `Refusing to drop` | Gate sharti bajarilmagan | Xabardagi sababni o'qing: dump fayl, `verify`, `--verified` (10-bo'lim) |
 | `Out of memory` | ScyllaDB/TB ga RAM yetishmayapti | `free -h`; limitlar 3-bo'limdagi byudjetga mosligini tekshiring |
 | `Timeout` / sekin yozish | Yuk oshib ketgan (Scylla 1 GB limitda) | `workers: 2`, `scylla_concurrency: 32` bilan boshlang |
@@ -619,7 +613,7 @@ SELECT * FROM ts_kv_cf LIMIT 10;
 - Har qanday partition verify'siz DROP qilinmaydi — dump (`~/backup/<part>.dump`) + eski PG'da data bor.
 - Switchover tekshiruvi o'tmasa: `docker compose -f docker-compose.new-stack.yml --profile tb stop tb-pe`, keyin `sudo systemctl start thingsboard` — eski stack joyida.
 - Yangi PG buzilsa: `~/backup/schema.dump` + `~/backup/nontskv.dump` dan qayta restore (8-bo'lim).
-- DROP qilingan partition kerak bo'lsa: `docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction < ~/backup/<part>.dump` (yangi PG'ga) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
+- DROP qilingan partition kerak bo'lsa: `docker cp ~/backup/<part>.dump postgres-new:/tmp/<part>.dump && docker exec postgres-new pg_restore -U postgres -d thingsboard /tmp/<part>.dump` (yangi PG'ga) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
 
 ---
 
