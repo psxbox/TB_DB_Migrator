@@ -45,6 +45,8 @@ services:
         condition: service_healthy
       scylladb:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # host servislariga (masalan localhost:10021 REST) chiqish uchun
     environment:
       TB_SERVICE_ID: tb-pe-new
       JAVA_OPTS: "-Xms1G -Xmx2G"
