@@ -61,7 +61,6 @@ services:
       TB_LICENSE_INSTANCE_DATA_FILE: ${TB_LICENSE_INSTANCE_DATA_FILE:-}
     volumes:
       - ./tb-pe/conf:/config
-      - ./tb-pe/log:/var/log/thingsboard
     ports:
       - "8080:8080"
       - "1883:1883"
