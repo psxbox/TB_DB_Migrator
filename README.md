@@ -367,10 +367,10 @@ ls -lh ~/backup/<part>.dump
 dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --workers 2
 ```
 
-**Qadam 3 — delta-pass:** birinchi pass tugagach, pass oralig'ida kelgan yozuvlarni ko'chirish (`MaxTs` ni checkpoint'dan oling):
+**Qadam 3 — delta-pass:** birinchi pass tugagach (yoki uzilgan bo'lsa), checkpoint'dan keyin kelgan qatorlarni ko'chirish. `--resume` saqlangan cursor'dan aynan davom etadi — overlap va o'tkazib yuborishsiz, hisoblagich aniq qoladi:
 
 ```bash
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from $((pass1_max_ts - 1)) --workers 2
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
 ```
 
 **Qadam 4 — verify** (10-bo'lim):
@@ -404,7 +404,7 @@ docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT setval('t
 **Qadam 3 — hot partition'ning so'nggi deltasini ko'chirish:**
 
 ```bash
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from $((last_max_ts - 1)) --workers 2
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
 dotnet bin/Release/net10.0/tbmigrator.dll verify --partition <part>
 ```
 
@@ -554,13 +554,14 @@ Migrator progress ni `migration_progress.json` fayliga saqlaydi (har bir batch'd
 ### Partition resume
 
 ```bash
-# To'xtagan partition'ni davom ettirish (MaxTs checkpoint'da saqlangan)
+# To'xtagan partition'ni davom ettirish — --resume saqlangan cursor'dan aynan davom etadi
+# (overlap yo'q, o'tkazib yuborish yo'q; ScyllaCount hisoblagichi aniq qoladi)
 dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
 
-# Delta'dan boshlash (allaqachon ko'chgan qatorlarni o'tkazib yuborish). max_ts - 1 ishlating:
-# bir xil millisekunddagi qatorlar batch chegarasida bo'lishi mumkin; 1 ms overlap zararsiz
-# (upsert'lar idempotent)
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from $((max_ts - 1)) --workers 2
+# Qo'lda delta (muqobil): ts > qiymatli barcha qatorlar stream qilinadi. Overlap qatorlar
+# qayta yoziladi (idempotent), lekin hisoblagich ularni yana sanaydi — shu sababli
+# --resume afzal. Qo'lda delta ishlatilsa, verify oldidan yana bir marta --resume bajaring.
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from <ts> --workers 2
 ```
 
 ### Holat tekshirish
@@ -591,7 +592,7 @@ Barcha xato va ogohlantirishlar konsol (stderr) ga yoziladi — `screen -r migra
 | `Connection refused` (ScyllaDB) | ScyllaDB hali tayyor emas | ScyllaDB `healthy` bo'lguncha kuting (`docker compose -f docker-compose.new-stack.yml ps`) |
 | `Keyspace ... does not exist` | Schema yaratilmagan | `dotnet bin/Release/net10.0/tbmigrator.dll init-schema` ni bajaring (yoki `start` o'zi yaratadi) |
 | `Unknown partition` | `--partition` nomi xato | `list-partitions` bilan to'g'ri nomni oling |
-| `Count mismatch` (verify) | Delta yozuvlar kelgan yoki yozish tugamagan | Delta-pass (`--delta-from`) ni qayta bajaring, keyin `verify` ni takrorlang |
+| `Count mismatch` (verify) | Delta yozuvlar kelgan yoki yozish tugamagan | `start --partition <part> --resume` (cursor'dan aynan davom), keyin `verify` ni takrorlang |
 | `Refusing to drop` | Gate sharti bajarilmagan | Xabardagi sababni o'qing: dump fayl, `verify`, `--verified` (10-bo'lim) |
 | `Out of memory` | ScyllaDB/TB ga RAM yetishmayapti | `free -h`; limitlar 3-bo'limdagi byudjetga mosligini tekshiring |
 | `Timeout` / sekin yozish | Yuk oshib ketgan (Scylla 1 GB limitda) | `workers: 2`, `scylla_concurrency: 32` bilan boshlang |

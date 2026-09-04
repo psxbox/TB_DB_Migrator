@@ -188,10 +188,10 @@ Mavjud kodda partition-scope yo'q (`PgReader` butun `ts_kv` ni entity-key bo'yic
 - `ScyllaReader.CountPartitionAsync(partRange)`: verify uchun — yangi metod (`ScyllaWriter` ga reader qo'shiladi yoki alohida `ScyllaReader` class). `ts_kv_cf` da `partition` qiymatlari `Partition.Compute(ts)` bilan hisoblanadi; count PG bilan solishtiriladi.
 - CLI:
   - `tbmigrator list-partitions [--config]` — nom, min/max ts, count, size.
-  - `tbmigrator start --partition <part> [--delta-from <ts>] [--resume] [--workers N]` — faqat shu partition. Mavjud `--historical-only` saqlanadi.
+  - `tbmigrator start --partition <part> [--delta-from <ts>] [--resume] [--workers N]` — faqat shu partition. `--resume` saqlangan cursor'dan aynan davom etadi. Mavjud `--historical-only` saqlanadi.
   - `tbmigrator verify --partition <part>` — exit code 0 = count match + sample match; 1 = mismatch.
   - `tbmigrator drop --partition <part> --dump-file <path> --verified` — uchala shart bajarilmasa rad etadi: dump fayl mavjud, verify o'tgan (checkpoint'da belgi), `--verified` flag berilgan. `DROP TABLE <part>;` ni eski PG'da bajaradi.
-- Checkpoint (`migration_progress.json`): `partitions: {<part>: {state, pg_count, scylla_count, dump_file, verified, dropped}}` maydoni qo'shiladi. Resume partition darajasida.
+- Checkpoint (`migration_progress.json`): `partitions: {<part>: {state, pg_count, scylla_count, dump_file, verified, dropped, max_ts, last_entity_id, last_key}}` maydonlari qo'shiladi; `last_entity_id/last_key/max_ts` — stream cursor, `--resume` undan aynan davom etadi (overlap/skip yo'q, hisoblagich aniq). Resume partition darajasida.
 - `config.yaml`: `migrator.partition_batch` (standart `batch_size` bilan bir xil) va `migrator.verify_sample_size` (standart 1000) qo'shiladi. Mavjud kalitlar o'zgarmaydi.
 
 ## 9. Verify + DROP safety gate

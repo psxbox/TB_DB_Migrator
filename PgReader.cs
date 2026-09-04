@@ -389,6 +389,7 @@ public class PgReader : IAsyncDisposable
     public async IAsyncEnumerable<List<TsRow>> StreamPartitionAsync(
         string partition,
         long deltaFromTs,
+        (Guid EntityId, string Key, long Ts)? resumeCursor,
         Dictionary<int, string> keyMap,
         bool hybridMode,
         int batchSize,
@@ -397,8 +398,9 @@ public class PgReader : IAsyncDisposable
         // Keyset pagination in PK order (entity_id, key, ts) — served directly by the
         // ts_kv PRIMARY KEY. A ts-leading order would need an index TB 3.4 does not
         // have and would full-scan the remaining rows on EVERY page (O(N^2/batch)).
-        // deltaFromTs is a plain filter, not part of the ordering.
-        (Guid, string, long)? last = null;
+        // deltaFromTs is a plain filter, not part of the ordering. resumeCursor (when
+        // set) starts the stream exactly after the persisted cursor position.
+        (Guid, string, long)? last = resumeCursor;
         while (true)
         {
             await using var cmd = _conn.CreateCommand();

@@ -102,11 +102,14 @@ internal static class Program
                 if (resume && deltaFrom == long.MinValue &&
                     tracker.Progress.Partitions.TryGetValue(part, out var prev))
                     Console.Error.WriteLine(
-                        $"[INFO] Resuming partition {part}: stored scylla_count={prev.ScyllaCount} max_ts={prev.MaxTs} " +
-                        $"(Scylla INSERTs are idempotent upserts — resume double-write is harmless). " +
-                        $"Pass --delta-from {prev.MaxTs - 1} — the 1 ms overlap covers same-ms rows " +
-                        "that may straddle the interrupted batch boundary.");
-                await orch.RunPartitionAsync(part, deltaFrom, cfg.Migrator.Workers, cts.Token);
+                        prev.LastEntityId is { Length: > 0 }
+                            ? $"[INFO] Resuming partition {part}: stored scylla_count={prev.ScyllaCount} " +
+                              $"cursor=({prev.LastEntityId}, {prev.LastKey}, ts={prev.MaxTs}). " +
+                              "--resume continues exactly from the stored cursor (no overlap, no skip; ScyllaCount stays exact)."
+                            : $"[INFO] Resuming partition {part}: stored scylla_count={prev.ScyllaCount} max_ts={prev.MaxTs} — " +
+                              "legacy checkpoint without cursor; a full re-run will be performed " +
+                              "(idempotent upserts, counter self-corrects).");
+                await orch.RunPartitionAsync(part, deltaFrom, resume, cfg.Migrator.Workers, cts.Token);
                 AnsiConsole.MarkupLine($"[green]Partition {part} migration complete.[/]");
                 return 0;
             }
@@ -391,9 +394,9 @@ internal static class Program
     // -------------------------------------------------------------------------
     static async Task PrintLoop(ProgressTracker tracker, CancellationToken ct)
     {
-        try
+        while (!ct.IsCancellationRequested)
         {
-            while (!ct.IsCancellationRequested)
+            try
             {
                 await Task.Delay(5_000, ct);
                 // Build the whole line under the tracker lock — enumerating Partitions
@@ -411,12 +414,12 @@ internal static class Program
                 });
                 Console.Error.WriteLine(line);
             }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            // Keep monitoring alive — a transient failure must not silently kill [STATUS].
-            Console.Error.WriteLine($"[WARN] status loop error: {ex.Message}");
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                // Keep the loop alive — a transient failure must not silently kill [STATUS].
+                Console.Error.WriteLine($"[WARN] status loop error: {ex.Message}");
+            }
         }
     }
 
@@ -426,9 +429,14 @@ internal static class Program
 
     static string? Flag(string[] args, string name)
     {
-        for (int i = 0; i < args.Length - 1; i++)
+        for (int i = 0; i < args.Length; i++)
+        {
             if (args[i].Equals(name, StringComparison.OrdinalIgnoreCase))
-                return args[i + 1];
+                return i + 1 < args.Length ? args[i + 1] : null;
+            // also accept --name=value form (previously silently ignored → full re-stream)
+            if (args[i].StartsWith(name + "=", StringComparison.OrdinalIgnoreCase))
+                return args[i][(name.Length + 1)..];
+        }
         return null;
     }
 }
