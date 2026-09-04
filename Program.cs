@@ -351,6 +351,29 @@ internal static class Program
             table.AddRow("Watermark",
                 DateTimeOffset.FromUnixTimeMilliseconds(p.WatermarkTs).ToString("O"));
         AnsiConsole.Write(table);
+
+        // Per-partition progress (spec: partition checkpoint shown in status)
+        if (p.Partitions.Count > 0)
+        {
+            var pt = new Table();
+            pt.AddColumn("Partition");
+            pt.AddColumn("State");
+            pt.AddColumn("Pg Count");
+            pt.AddColumn("Scylla Count");
+            pt.AddColumn("MaxTs");
+            pt.AddColumn("Verified");
+            pt.AddColumn("Dropped");
+            foreach (var (name, pp) in p.Partitions.OrderBy(kv => kv.Key))
+                pt.AddRow(
+                    name,
+                    pp.State,
+                    $"{pp.PgCount:N0}",
+                    $"{pp.ScyllaCount:N0}",
+                    pp.MaxTs == 0 ? "-" : DateTimeOffset.FromUnixTimeMilliseconds(pp.MaxTs).ToString("yyyy-MM-dd HH:mm"),
+                    pp.Verified.ToString(),
+                    pp.Dropped.ToString());
+            AnsiConsole.Write(pt);
+        }
         return 0;
     }
 
@@ -363,9 +386,15 @@ internal static class Program
             {
                 await Task.Delay(5_000, ct);
                 var p = tracker.Progress;
+                // Partition mode: live scylla/pg counters for the migrating partition.
+                // entities_done is only populated by the legacy entity-key flow.
+                var active = p.Partitions.FirstOrDefault(kv => kv.Value.State == "migrating");
+                string partInfo = active.Key is null
+                    ? ""
+                    : $" part={active.Key} scylla={active.Value.ScyllaCount:N0}/{active.Value.PgCount:N0}";
                 Console.Error.WriteLine(
                     $"[STATUS] phase={p.Phase} migrated={p.MigratedRows:N0} " +
-                    $"skipped={p.SkippedRows:N0} entities_done={p.CompletedEntities.Count}");
+                    $"skipped={p.SkippedRows:N0} entities_done={p.CompletedEntities.Count}{partInfo}");
             }
         }
         catch (OperationCanceledException) { }

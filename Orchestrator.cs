@@ -67,8 +67,12 @@ public class Orchestrator
                 prevMaxTs = prev.MaxTs;
             }
         }
-        _tracker.Update(p => p.Partitions[partition] = new PartitionProgress(
-            "migrating", pgCount, baseCount, prevDump, false, false, prevMaxTs));
+        _tracker.Update(p =>
+        {
+            p.Phase = $"partition:{partition}";
+            p.Partitions[partition] = new PartitionProgress(
+                "migrating", pgCount, baseCount, prevDump, false, false, prevMaxTs);
+        });
         long written = 0, maxTs = deltaFromTs;
         // Stream batches sequentially (ordering matters for keyset pagination),
         // writes are parallel via Task.WhenAll + ScyllaWriter semaphore.
