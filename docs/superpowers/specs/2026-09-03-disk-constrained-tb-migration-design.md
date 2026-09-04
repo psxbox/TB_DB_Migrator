@@ -56,7 +56,7 @@ Bitta fayl, uchta service. TB `profiles: ["tb"]` bilan — dastlab `up postgres-
 - `postgres-new`:
   - image: `postgres:18` (eski bilan bir xil major versiya — dump/restore mosligi uchun).
   - host port: `127.0.0.1:15432:5432` (eski 5432 bilan konflikt yo'q).
-  - data: external docker volume `tb-pg-new-data:/var/lib/postgresql/data` (oldindan `docker volume create` bilan yaratiladi; `ts_kv` siz baza kichik).
+  - data: external docker volume `tb-pg-new-data:/var/lib/postgresql` (oldindan `docker volume create` bilan yaratiladi; `ts_kv` siz baza kichik; PG18 rasmiy image'da VOLUME `/var/lib/postgresql` — `/data` suffix yo'q).
   - memory: `mem_limit: 512m`, `mem_reservation: 256m`; `command: postgres -c shared_buffers=128MB -c effective_cache_size=256MB -c maintenance_work_mem=64MB -c max_connections=100`.
   - `POSTGRES_DB=thingsboard`, user/pass env'dan.
 - `scylladb`:
