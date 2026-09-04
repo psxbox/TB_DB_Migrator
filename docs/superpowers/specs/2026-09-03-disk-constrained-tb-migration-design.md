@@ -123,12 +123,12 @@ Root diskni to'ldirmaslik uchun **barcha katta dump'lar pipe orqali** to'g'ridan
 1. `docker compose -f docker-compose.new-stack.yml up -d postgres-new` — yangi PG'ni ko'tarish, bo'sh `thingsboard` DB tayyor.
 2. Schema-only dump (barcha jadvallar, jumladan `ts_kv` bo'sh strukturasi, kichik fayl):
    `docker exec $OLD_PG pg_dump -U postgres -d thingsboard --schema-only -Fc > ~/backup/schema.dump`
-   Yangi PG'ga restore (pg_restore host'da yo'q — konteyner ichida): `docker cp ~/backup/schema.dump postgres-new:/tmp/schema.dump && docker exec postgres-new pg_restore -U postgres -d thingsboard --exit-on-error /tmp/schema.dump`.
+   Yangi PG'ga restore via stdin (pg_restore host'da yo'q; konteyner /tmp root diskda — katta dump'lar u yerga yozilmaydi): `docker exec -i postgres-new pg_restore -U postgres -d thingsboard --exit-on-error < ~/backup/schema.dump`.
 3. Data-only dump, `ts_kv` datasisiz (schema allaqachon bor) — pipe, oraliq faylsiz. Diqqat: `--exclude-table-data='ts_kv*'` patterni `ts_kv_dictionary` va `ts_kv_latest` ni ham chiqarib tashlaydi (psql pattern'da `*` — istalgan belgi), shuning uchun ikkita dump olinadi:
    `docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc --exclude-table-data='ts_kv*' > ~/backup/nontskv.dump`
    `docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc -t ts_kv_dictionary -t ts_kv_latest > ~/backup/dict-latest.dump`
    Birinchisi `ts_kv` parent + barcha child partition datalarini tashlab ketadi; ikkinchisi lug'at + latest'ni alohida oladi.
-   Restore konteyner ichida: `docker cp` bilan `/tmp` ga ko'chirib, `docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/<file>.dump` (`--disable-triggers` — `device_profile` ↔ `ota_package` circular FK uchun).
+   Restore via stdin: `docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error < ~/backup/<file>.dump` (`--disable-triggers` — `device_profile` ↔ `ota_package` circular FK uchun; streaming — konteyner /tmp root diskda).
    Fayl hajmi — `ts_kv` siz DB hajmiga teng (noma'lum; `~/backup/` /home'da bo'lgani uchun root to'lmaydi).
 4. Tekshiruv: yangi PG'da jadval soni (`\dt`), `ts_kv` bo'shligi (`SELECT count(*) FROM ts_kv` = 0), `ts_kv_dictionary` va `ts_kv_latest` count'larini eski bilan solishtirish.
 5. Delta-izoh: nusxa paytida eski TB ishlayotgani uchun entity/latest jadvallariga ozgina yozuv tushishi mumkin. Switchover paytida (eski TB stop qilingan) kichik jadvallar (`ts_kv_latest`, `ts_kv_dictionary`) bir marta qayta dump/restore qilinadi (tez, MB'lar darajasi). Katta jadvallar uchun takror shart emas.
@@ -210,7 +210,7 @@ DROP — eng xavfli operatsiya. Qoida (istisnosiz):
 - Har qanday partition verify'siz DROP qilinmaydi — dump + eski PG'da data bor.
 - Switchover tekshiruvi o'tmasa: `docker compose --profile tb stop tb-pe`, `sudo systemctl start thingsboard` — eski stack joyida.
 - Yangi PG buzilsa: `~/backup/schema.dump` + `nontskv.dump` dan qayta restore.
-- DROP qilingan partition kerak bo'lsa: `docker cp ~/backup/<part>.dump postgres-new:/tmp/<part>.dump && docker exec postgres-new pg_restore -U postgres -d thingsboard /tmp/<part>.dump` (yangi PG'ga) yoki eski PG'ga (`docker exec` orqali) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
+- DROP qilingan partition kerak bo'lsa: `docker exec -i postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction < ~/backup/<part>.dump` (yangi PG'ga) yoki eski PG'ga (`docker exec` orqali) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
 
 ## 11. Risklar
 
