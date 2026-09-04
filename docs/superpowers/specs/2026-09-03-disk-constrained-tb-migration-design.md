@@ -144,7 +144,7 @@ Root diskni to'ldirmaslik uchun **barcha katta dump'lar pipe orqali** to'g'ridan
 3. Migrator bilan faqat shu partitionni ko'chirish (yangi CLI — 8-bo'lim):
    `tbmigrator start --partition <part> [--resume]`.
    Eski TB hali ishlayapti — hot partition'ga yangi yozuvlar tushishda davom etadi.
-4. Delta-pass: birinchi pass tugagach, `tbmigrator start --partition <part> --delta-from <pass1_max_ts>` — pass oralig'ida kelgan yozuvlarni ko'chirish.
+4. Delta-pass: birinchi pass tugagach (yoki uzilgan bo'lsa), `tbmigrator start --partition <part> --resume` — checkpoint holatiga qarab cursor-davom yoki delta (`ts > max_ts`).
 5. Verify (9-bo'lim): `tbmigrator verify --partition <part>` — PG count == Scylla count + sample. O'tmasa — DROP yo'q, log tahlil qilinadi.
 6. Verify o'tgach, partition hali DROP qilinmaydi (eski TB hali ishlayapti va hot partition'ga yozmoqda — 7-bo'lim switchover'dan keyin DROP).
 
@@ -152,7 +152,7 @@ Root diskni to'ldirmaslik uchun **barcha katta dump'lar pipe orqali** to'g'ridan
 
 1. `sudo systemctl stop thingsboard` (eski RPM TB) — shu paytdan eski PG frozen.
 2. Kichik jadvallar deltasini qayta nusxalash (`ts_kv_latest`, `ts_kv_dictionary`) — 5-bo'lim 5-qadam.
-3. Hot partition'ning so'nggi deltasini ko'chirish (`--delta-from`).
+3. Hot partition'ning so'nggi deltasini ko'chirish (`--resume` — tugallangan pass uchun delta rejimi).
 4. `docker compose -f docker-compose.new-stack.yml --profile tb up -d tb-pe`, log kuzatish (`docker logs -f tb-pe` — "ThingsBoard started").
 5. To'liq tekshiruv (Hammasi + API):
    - Login (UI + `POST /api/auth/login` 200).
@@ -188,7 +188,7 @@ Mavjud kodda partition-scope yo'q (`PgReader` butun `ts_kv` ni entity-key bo'yic
 - `ScyllaReader.CountPartitionAsync(partRange)`: verify uchun — yangi metod (`ScyllaWriter` ga reader qo'shiladi yoki alohida `ScyllaReader` class). `ts_kv_cf` da `partition` qiymatlari `Partition.Compute(ts)` bilan hisoblanadi; count PG bilan solishtiriladi.
 - CLI:
   - `tbmigrator list-partitions [--config]` — nom, min/max ts, count, size.
-  - `tbmigrator start --partition <part> [--delta-from <ts>] [--resume] [--workers N]` — faqat shu partition. `--resume` saqlangan cursor'dan aynan davom etadi. Mavjud `--historical-only` saqlanadi.
+  - `tbmigrator start --partition <part> [--delta-from <ts>] [--resume] [--workers N]` — faqat shu partition. `--resume` ikki rejim: uzilgan pass (state=migrating + cursor) — PK cursor'dan aynan davom; tugallangan pass (state=migrated) — delta `ts > max_ts` (yozilmagan qatorlar, counter aniq). Mavjud `--historical-only` saqlanadi.
   - `tbmigrator verify --partition <part>` — exit code 0 = count match + sample match; 1 = mismatch.
   - `tbmigrator drop --partition <part> --dump-file <path> --verified` — uchala shart bajarilmasa rad etadi: dump fayl mavjud, verify o'tgan (checkpoint'da belgi), `--verified` flag berilgan. `DROP TABLE <part>;` ni eski PG'da bajaradi.
 - Checkpoint (`migration_progress.json`): `partitions: {<part>: {state, pg_count, scylla_count, dump_file, verified, dropped, max_ts, last_entity_id, last_key}}` maydonlari qo'shiladi; `last_entity_id/last_key/max_ts` — stream cursor, `--resume` undan aynan davom etadi (overlap/skip yo'q, hisoblagich aniq). Resume partition darajasida.

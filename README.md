@@ -367,7 +367,7 @@ ls -lh ~/backup/<part>.dump
 dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --workers 2
 ```
 
-**Qadam 3 — delta-pass:** birinchi pass tugagach (yoki uzilgan bo'lsa), checkpoint'dan keyin kelgan qatorlarni ko'chirish. `--resume` saqlangan cursor'dan aynan davom etadi — overlap va o'tkazib yuborishsiz, hisoblagich aniq qoladi:
+**Qadam 3 — davom ettirish/delta:** birinchi pass tugagach (yoki uzilgan bo'lsa) `--resume` ni ishga tushiring — u checkpoint holatiga qarab rejimni o'zi tanlaydi (qarang 12-bo'lim):
 
 ```bash
 dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
@@ -553,16 +553,21 @@ Migrator progress ni `migration_progress.json` fayliga saqlaydi (har bir batch'd
 
 ### Partition resume
 
-```bash
-# To'xtagan partition'ni davom ettirish — --resume saqlangan cursor'dan aynan davom etadi
-# (overlap yo'q, o'tkazib yuborish yo'q; ScyllaCount hisoblagichi aniq qoladi)
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
+`--resume` checkpoint holatiga qarab rejimni o'zi tanlaydi:
 
-# Qo'lda delta (muqobil): ts > qiymatli barcha qatorlar stream qilinadi. Overlap qatorlar
-# qayta yoziladi (idempotent), lekin hisoblagich ularni yana sanaydi — shu sababli
-# --resume afzal. Qo'lda delta ishlatilsa, verify oldidan yana bir marta --resume bajaring.
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from <ts> --workers 2
+| Checkpoint holati | Rejim | Nega aniq |
+|---|---|---|
+| `migrating` + cursor | **Cursor** — uzilgan pass aynan cursor'dan davom etadi | Cursor'dan keyingi qatorlarning hech biri yozilmagan — overlap yo'q, o'tkazib yuborish yo'q, hisoblagich aniq |
+| `migrating`, cursor yo'q (eski checkpoint) | **Full re-run** | Idempotent upsert'lar, hisoblagich o'z-o'zini to'g'rilaydi |
+| `migrated` | **Delta** — `ts > max_ts` qatorlar | `max_ts` — yozilgan barcha qatorlarning max ts'i; undan katta ts'li qatorlar avval yozilmagan — overlap yo'q, hisoblagich aniq |
+
+Cursor checkpoint'da `last_entity_id`, `last_key`, `last_ts` maydonlarida saqlanadi (PK tartibidagi oxirgi yozilgan qator pozitsiyasi).
+
+```bash
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
 ```
+
+Qo'lda delta (muqobil): `--delta-from <ts>` — `ts > qiymat` qatorlarni stream qiladi. Aniq natija uchun qiymat = checkpoint'dagi `max_ts` bo'lishi kerak (undan katta ts'li qatorlar avval yozilmagan).
 
 ### Holat tekshirish
 

@@ -54,42 +54,68 @@ public class Orchestrator
         var (keyMap, hybridMode) = await _reader.LoadKeyMapAsync(ct);
         var entityMap = await _reader.LoadEntityMapAsync(ct);
         long pgCount = await _reader.CountPartitionAsync(partition, ct);
-        // Counting semantics:
-        //   cursor resume (--resume with stored cursor): streams only rows after the
-        //     checkpointed position → accumulated ScyllaCount stays exact.
-        //   manual --delta-from: streams every row with ts > value — overlap rows are
-        //     re-written (idempotent) but re-counted → prefer --resume.
-        //   full run: starts from zero (re-writes everything, counter self-corrects).
-        long baseCount = 0, prevMaxTs = 0;
+        // Resume modes (README §12):
+        //   FULL   — fresh pass; counter starts at zero (idempotent re-writes, self-correcting).
+        //   CURSOR — interrupted pass (--resume, state=migrating, stored cursor): streams exactly
+        //            the rows after the checkpointed PK position — nothing re-read, nothing skipped;
+        //            counter stays exact. INVALID for completed passes: new rows sort BEFORE the
+        //            PK-max cursor → they would be permanently missed.
+        //   DELTA  — catch-up after a completed pass (--resume, state=migrated → ts filter = prev.MaxTs;
+        //            or manual --delta-from <ts>): streams rows with ts > filter. Every row with
+        //            ts > checkpointed MaxTs was NEVER written before (MaxTs is the max over all
+        //            written rows) → no overlap, counter stays exact.
+        // Legacy checkpoint (state=migrating, no cursor) → FULL (safe: idempotent, self-correcting).
+        long baseCount = 0, tsFilter = long.MinValue, prevMaxTs = 0;
         string? prevDump = null, prevEid = null, prevKey = null;
+        long prevLastTs = 0;
         (Guid, string, long)? resumeCursor = null;
-        if (_tracker.Progress.Partitions.TryGetValue(partition, out var prev))
+        bool havePrev = _tracker.Progress.Partitions.TryGetValue(partition, out var prev);
+        if (havePrev)
         {
             prevDump = prev.DumpFile;
-            if (deltaFromTs != long.MinValue)
+            prevMaxTs = prev.MaxTs;
+        }
+        if (deltaFromTs != long.MinValue)
+        {
+            // manual delta
+            baseCount = havePrev ? prev.ScyllaCount : 0;
+            tsFilter = deltaFromTs;
+        }
+        else if (resume && havePrev)
+        {
+            if (prev.State == "migrating"
+                && prev.LastEntityId is { Length: > 0 } leid
+                && prev.LastKey is { Length: > 0 } lkey
+                && Guid.TryParse(leid, out var leidGuid))
             {
+                // CURSOR: exact continuation of the interrupted pass
                 baseCount = prev.ScyllaCount;
-                prevMaxTs = prev.MaxTs;
-            }
-            else if (resume
-                     && prev.LastEntityId is { Length: > 0 } leid
-                     && prev.LastKey is { Length: > 0 } lkey
-                     && Guid.TryParse(leid, out var leidGuid))
-            {
-                resumeCursor = (leidGuid, lkey, prev.MaxTs);
-                baseCount = prev.ScyllaCount;
-                prevMaxTs = prev.MaxTs;
+                resumeCursor = (leidGuid, lkey, prev.LastTs);
                 prevEid = leid;
                 prevKey = lkey;
+                prevLastTs = prev.LastTs;
+            }
+            else if (prev.State == "migrating")
+            {
+                // legacy interrupted checkpoint without cursor → safe full re-run
+                baseCount = 0;
+            }
+            else
+            {
+                // completed pass → delta catch-up (ts > prev.MaxTs ⇒ never written)
+                baseCount = prev.ScyllaCount;
+                tsFilter = prev.MaxTs;
             }
         }
         _tracker.Update(p =>
         {
             p.Phase = $"partition:{partition}";
             p.Partitions[partition] = new PartitionProgress(
-                "migrating", pgCount, baseCount, prevDump, false, false, prevMaxTs, prevEid, prevKey);
+                "migrating", pgCount, baseCount, prevDump, false, false, prevMaxTs, prevEid, prevKey, prevLastTs);
         });
-        long written = 0, maxTs = resumeCursor?.Item3 ?? deltaFromTs;
+        // MaxTs must stay monotonic across passes (the delta-exactness invariant relies on it:
+        // ts > checkpointed MaxTs ⇒ never written), so start from the previous global max.
+        long written = 0, maxTs = Math.Max(prevMaxTs, resumeCursor?.Item3 ?? tsFilter);
         // Reverse key map: TsRow.Key holds the resolved key NAME; the resume cursor
         // needs the RAW key (physical column value). Key names are unique in
         // ts_kv_dictionary, so the reverse lookup is exact; unmapped keys fall back
@@ -99,7 +125,7 @@ public class Orchestrator
             : null;
         // Stream batches sequentially (ordering matters for keyset pagination),
         // writes are parallel via Task.WhenAll + ScyllaWriter semaphore.
-        await foreach (var batch in _reader.StreamPartitionAsync(partition, deltaFromTs, resumeCursor, keyMap, hybridMode, _cfg.Migrator.PartitionBatch, ct))
+        await foreach (var batch in _reader.StreamPartitionAsync(partition, tsFilter, resumeCursor, keyMap, hybridMode, _cfg.Migrator.PartitionBatch, ct))
         {
             var byType = new Dictionary<string, List<TsRow>>();
             foreach (var row in batch)
@@ -123,7 +149,7 @@ public class Orchestrator
                 : keyNameToRaw.TryGetValue(lastRow.Key, out var raw) ? raw : lastRow.Key;
             _tracker.Update(p => p.Partitions[partition] = p.Partitions[partition] with
             {
-                ScyllaCount = w, MaxTs = m, LastEntityId = lastRow.EntityId, LastKey = lastRawKey
+                ScyllaCount = w, MaxTs = m, LastEntityId = lastRow.EntityId, LastKey = lastRawKey, LastTs = lastRow.Ts
             });
             _tracker.Update(p => p.MigratedRows += batch.Count);
         }

@@ -50,12 +50,18 @@ internal static class Program
         if (wStr is not null && int.TryParse(wStr, out int w) && w > 0)
             cfg.Migrator.Workers = w;
         string? part = Flag(args, "--partition");
-        long deltaFrom = long.MinValue;
-        if (Flag(args, "--delta-from") is { } deltaStr)
+        string? deltaStr = Flag(args, "--delta-from");
+        if (args.Any(a => a.Equals("--delta-from", StringComparison.OrdinalIgnoreCase)) && deltaStr is null)
         {
-            if (!long.TryParse(deltaStr, out deltaFrom))
+            Console.Error.WriteLine("--delta-from requires a value (epoch milliseconds).");
+            return 1;
+        }
+        long deltaFrom = long.MinValue;
+        if (deltaStr is { } deltaVal)
+        {
+            if (!long.TryParse(deltaVal, out deltaFrom))
             {
-                Console.Error.WriteLine($"Invalid --delta-from value '{deltaStr}' — expected epoch-milliseconds integer.");
+                Console.Error.WriteLine($"Invalid --delta-from value '{deltaVal}' — expected epoch-milliseconds integer.");
                 return 1;
             }
         }
@@ -102,13 +108,15 @@ internal static class Program
                 if (resume && deltaFrom == long.MinValue &&
                     tracker.Progress.Partitions.TryGetValue(part, out var prev))
                     Console.Error.WriteLine(
-                        prev.LastEntityId is { Length: > 0 }
-                            ? $"[INFO] Resuming partition {part}: stored scylla_count={prev.ScyllaCount} " +
-                              $"cursor=({prev.LastEntityId}, {prev.LastKey}, ts={prev.MaxTs}). " +
-                              "--resume continues exactly from the stored cursor (no overlap, no skip; ScyllaCount stays exact)."
-                            : $"[INFO] Resuming partition {part}: stored scylla_count={prev.ScyllaCount} max_ts={prev.MaxTs} — " +
-                              "legacy checkpoint without cursor; a full re-run will be performed " +
-                              "(idempotent upserts, counter self-corrects).");
+                        prev.State == "migrating" && prev.LastEntityId is { Length: > 0 }
+                            ? $"[INFO] Resuming interrupted pass on {part}: scylla_count={prev.ScyllaCount}, " +
+                              $"cursor=({prev.LastEntityId}, {prev.LastKey}, ts={prev.LastTs}). " +
+                              "--resume continues exactly from the cursor (no overlap, no skip)."
+                            : prev.State == "migrated"
+                                ? $"[INFO] {part}: pass completed (scylla_count={prev.ScyllaCount}, max_ts={prev.MaxTs}). " +
+                                  $"--resume runs a delta catch-up: rows with ts > {prev.MaxTs} (never written → counter stays exact)."
+                                : $"[INFO] Resuming {part}: legacy checkpoint without cursor — a full re-run will be " +
+                                  "performed (idempotent upserts, counter self-corrects).");
                 await orch.RunPartitionAsync(part, deltaFrom, resume, cfg.Migrator.Workers, cts.Token);
                 AnsiConsole.MarkupLine($"[green]Partition {part} migration complete.[/]");
                 return 0;
