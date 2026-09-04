@@ -58,9 +58,10 @@ services:
       CASSANDRA_USE_CREDENTIALS: "false"
       CASSANDRA_KEYSPACE_NAME: thingsboard
       TB_LICENSE_SECRET: ${TB_LICENSE_SECRET:-}
-      TB_LICENSE_INSTANCE_DATA_FILE: ${TB_LICENSE_INSTANCE_DATA_FILE:-}
+      TB_LICENSE_INSTANCE_DATA_FILE: ${TB_LICENSE_INSTANCE_DATA_FILE:-/data/license.data}
     volumes:
       - ./tb-pe/conf:/config
+      - ./tb-pe/license:/data
     ports:
       - "8080:8080"
       - "1883:1883"
