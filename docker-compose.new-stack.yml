@@ -64,10 +64,17 @@ services:
     volumes:
       - ./tb-pe/conf:/config
       - ./tb-pe/license:/data
+    networks:
+      - default
+      - bs          # external network: emqxauth-api (REST :10021) shu tarmoqda
     ports:
       - "8080:8080"
       - "1883:1883"
       - "5683:5683/udp"
+
+networks:
+  bs:
+    external: true
 
 volumes:
   tb-pg-new-data:
