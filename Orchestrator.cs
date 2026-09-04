@@ -54,9 +54,21 @@ public class Orchestrator
         var (keyMap, hybridMode) = await _reader.LoadKeyMapAsync(ct);
         var entityMap = await _reader.LoadEntityMapAsync(ct);
         long pgCount = await _reader.CountPartitionAsync(partition, ct);
+        // Delta runs (--delta-from) ADD to the previous run's written count — rows
+        // before deltaFromTs are already in Scylla. A full run starts from zero.
+        long baseCount = 0, prevMaxTs = 0;
+        string? prevDump = null;
+        if (_tracker.Progress.Partitions.TryGetValue(partition, out var prev))
+        {
+            prevDump = prev.DumpFile;
+            if (deltaFromTs != long.MinValue)
+            {
+                baseCount = prev.ScyllaCount;
+                prevMaxTs = prev.MaxTs;
+            }
+        }
         _tracker.Update(p => p.Partitions[partition] = new PartitionProgress(
-            "migrating", pgCount, p.Partitions.TryGetValue(partition, out var prev) ? prev.ScyllaCount : 0,
-            p.Partitions.TryGetValue(partition, out var pr) ? pr.DumpFile : null, false, false, 0));
+            "migrating", pgCount, baseCount, prevDump, false, false, prevMaxTs));
         long written = 0, maxTs = deltaFromTs;
         // Stream batches sequentially (ordering matters for keyset pagination),
         // writes are parallel via Task.WhenAll + ScyllaWriter semaphore.
@@ -77,7 +89,7 @@ public class Orchestrator
             });
             await Task.WhenAll(tasks);
             written += batch.Count;
-            long w = written, m = maxTs;
+            long w = baseCount + written, m = maxTs;
             _tracker.Update(p => p.Partitions[partition] = p.Partitions[partition] with { ScyllaCount = w, MaxTs = m });
             _tracker.Update(p => p.MigratedRows += batch.Count);
         }
