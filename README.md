@@ -48,7 +48,7 @@
 - Eski stack: TB 3.4.1 PE (RPM, `systemctl thingsboard`) + PostgreSQL v18 (Docker, ~102 GB DB, root'da ~10 GB bo'sh)
 - `/home` alohida — `~/backup/` dagi `pg_dump -Fc` dumplari faqat shu yerga yoziladi (root'ga katta fayl yo'q)
 - Yangi stack bitta compose'da (`docker-compose.new-stack.yml`): `postgres-new` + `scylladb` + `tb-pe` (dastlab o'chiq)
-- Jami RAM 8 GB — limitlar: `tb-pe` 3g, `scylladb` 2g (`--memory 1G`), `postgres-new` 512m
+- Jami RAM 8 GB — limitlar: `tb-pe` 3g, `scylladb` 2g (cgroup'дан avto), `postgres-new` 512m
 - `VACUUM FULL` — **taqiqlanadi** (joy talab qiladi + lock); faqat oddiy `VACUUM`
 
 ### Qachon ishlatiladi?
@@ -109,7 +109,7 @@ REMOTE LINUX SERVER
   │  postgres-new (postgres:18, 127.0.0.1:15432, 512m)  │
   │    vol: tb-pg-new-data (ts_kv siz baza, kichik)      │
   │  scylladb (scylla:2026.1, 127.0.0.1:9042, 2g)          │
-  │    vol: tb-scylla-data  (--smp 1 --memory 1G)          │
+  │    vol: tb-scylla-data  (--smp 1, cgroup 2g)           │
   │  tb-pe (tb-pe-node:3.4.1PE, profile: tb, 3g)         │
   │    dastlab O'CHIQ, switchover'da yoqiladi            │
   └─────────────────────────────────────────────────────┘
@@ -160,7 +160,7 @@ REMOTE LINUX SERVER
 | Service | Limit | Reservation | Izoh |
 |---------|-------|-------------|------|
 | `tb-pe` | 3g | 2g | `JAVA_OPTS=-Xms1G -Xmx2G`; eski RPM TB stop qilingandan keyin yoqiladi — ikkita TB bir vaqtda ishlamaydi |
-| `scylladb` | 2g | — | `--smp 1 --memory 1G --overprovisioned 1`; ~1 GB container OS/page-cache zaxirasi |
+| `scylladb` | 2g | — | `--smp 1 --overprovisioned 1`; seastar limitni cgroup'dan o'zi aniqlaydi (`--memory 1G` qat'iy tekshiruvi `available 500M` deb start olmasdi) |
 | `postgres-new` | 512m | 256m | `shared_buffers=128MB`, kichik (`ts_kv` siz) baza uchun yetarli |
 
 Migrator'da `workers: 2` va `scylla_concurrency: 32` bilan boshlang.
@@ -640,7 +640,7 @@ PostgreSQL dan o'qish `LIMIT/OFFSET` o'rniga `(ts, entity_id, key)` bo'yicha key
 
 ### Resurslar (8 GB RAM byudjeti)
 
-`docker-compose.new-stack.yml` dagi limitlar (3-bo'lim): `tb-pe` 3g, `scylladb` 2g (`--smp 1 --memory 1G --overprovisioned 1`), `postgres-new` 512m. Eski `docker-compose.scylla.yml` (cheklovsiz) bu rejimda ishlatilmaydi.
+`docker-compose.new-stack.yml` dagi limitlar (3-bo'lim): `tb-pe` 3g, `scylladb` 2g (`--smp 1 --overprovisioned 1`, seastar cgroup'dan aniqlaydi), `postgres-new` 512m. Eski `docker-compose.scylla.yml` (cheklovsiz) bu rejimda ishlatilmaydi.
 
 ### screen ishlatish majburiy
 

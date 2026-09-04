@@ -23,7 +23,10 @@ services:
     image: scylladb/scylla:2026.1
     container_name: scylladb-new
     mem_limit: 2g
-    command: --smp 1 --memory 1G --overprovisioned 1
+    # --memory bayrog'i YO'Q: seastar cgroup'dan (2g) o'zi aniqlaydi.
+    # --memory 1G bilan "insufficient physical memory: available 500000000" qat'iy
+    # tekshiruvi startga yo'l qo'ymasdi (cgroup v2 da seastar ~1.5 GB reserve hisoblaydi).
+    command: --smp 1 --overprovisioned 1
     ports:
       - "127.0.0.1:9042:9042"
     volumes:
