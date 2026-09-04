@@ -184,7 +184,9 @@ public class ScyllaWriter
             or NoHostAvailableException
             or OperationTimedOutException;
 
-    private static TsRow TryCast(TsRow row)
+    // Public so verify (Program.RunVerify) can apply the identical transform
+    // to PG sample rows before comparing with Scylla rows.
+    public static TsRow TryCast(TsRow row)
     {
         if (row.StrV is null) return row;
         if (long.TryParse(row.StrV, out var l))

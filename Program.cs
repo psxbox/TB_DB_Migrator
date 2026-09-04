@@ -50,21 +50,7 @@ internal static class Program
         if (wStr is not null && int.TryParse(wStr, out int w) && w > 0)
             cfg.Migrator.Workers = w;
         string? part = Flag(args, "--partition");
-        string? deltaStr = Flag(args, "--delta-from");
-        if (args.Any(a => a.Equals("--delta-from", StringComparison.OrdinalIgnoreCase)) && deltaStr is null)
-        {
-            Console.Error.WriteLine("--delta-from requires a value (epoch milliseconds).");
-            return 1;
-        }
-        long deltaFrom = long.MinValue;
-        if (deltaStr is { } deltaVal)
-        {
-            if (!long.TryParse(deltaVal, out deltaFrom))
-            {
-                Console.Error.WriteLine($"Invalid --delta-from value '{deltaVal}' — expected epoch-milliseconds integer.");
-                return 1;
-            }
-        }
+        long deltaFrom = long.TryParse(Flag(args, "--delta-from"), out var d) ? d : long.MinValue;
 
         AnsiConsole.MarkupLine(
             $"[bold]TB Migrator (.NET 10)[/]  workers=[yellow]{cfg.Migrator.Workers}[/]  " +
@@ -108,16 +94,10 @@ internal static class Program
                 if (resume && deltaFrom == long.MinValue &&
                     tracker.Progress.Partitions.TryGetValue(part, out var prev))
                     Console.Error.WriteLine(
-                        prev.State == "migrating" && prev.LastEntityId is { Length: > 0 }
-                            ? $"[INFO] Resuming interrupted pass on {part}: scylla_count={prev.ScyllaCount}, " +
-                              $"cursor=({prev.LastEntityId}, {prev.LastKey}, ts={prev.LastTs}). " +
-                              "--resume continues exactly from the cursor (no overlap, no skip)."
-                            : prev.State == "migrated"
-                                ? $"[INFO] {part}: pass completed (scylla_count={prev.ScyllaCount}, max_ts={prev.MaxTs}). " +
-                                  $"--resume runs a delta catch-up: rows with ts > {prev.MaxTs} (never written → counter stays exact)."
-                                : $"[INFO] Resuming {part}: legacy checkpoint without cursor — a full re-run will be " +
-                                  "performed (idempotent upserts, counter self-corrects).");
-                await orch.RunPartitionAsync(part, deltaFrom, resume, cfg.Migrator.Workers, cts.Token);
+                        $"[INFO] Resuming partition {part}: stored scylla_count={prev.ScyllaCount} max_ts={prev.MaxTs} " +
+                        $"(Scylla INSERTs are idempotent upserts — resume double-write is harmless). " +
+                        $"Pass --delta-from {prev.MaxTs} to skip already-streamed rows.");
+                await orch.RunPartitionAsync(part, deltaFrom, cfg.Migrator.Workers, cts.Token);
                 AnsiConsole.MarkupLine($"[green]Partition {part} migration complete.[/]");
                 return 0;
             }
@@ -177,10 +157,10 @@ internal static class Program
             Console.Error.WriteLine($"No checkpoint entry for partition '{part}'. Migrate it first.");
             return 1;
         }
-        if (entry.State != "migrated" && entry.State != "verified")
+        if (entry.State != "migrated")
         {
             Console.Error.WriteLine(
-                $"Partition '{part}' state is '{entry.State}' — verify runs on migrated or verified partitions.");
+                $"Partition '{part}' state is '{entry.State}' — verify only runs on migrated partitions.");
             return 1;
         }
 
@@ -245,16 +225,19 @@ internal static class Program
         foreach (var row in sample)
         {
             if (!entityMap.TryGetValue(row.EntityId, out var et)) { mismatches++; continue; }
+            // Apply the same cast transform the writer used, otherwise cast_strings=true
+            // always mismatches (PG str_v vs Scylla long_v/dbl_v).
+            var expected = cfg.Migrator.CastStrings ? ScyllaWriter.TryCast(row) : row;
             var got = await sreader.GetPointAsync(
                 et, Guid.Parse(row.EntityId), row.Key,
                 Partition.Compute(row.Ts, cfg.Migrator.Partitioning), row.Ts);
             if (got is null
-                || got.Ts    != row.Ts
-                || got.BoolV != row.BoolV
-                || got.StrV  != row.StrV
-                || got.LongV != row.LongV
-                || got.DblV  != row.DblV
-                || got.JsonV != row.JsonV)
+                || got.Ts    != expected.Ts
+                || got.BoolV != expected.BoolV
+                || got.StrV  != expected.StrV
+                || got.LongV != expected.LongV
+                || got.DblV  != expected.DblV
+                || got.JsonV != expected.JsonV)
                 mismatches++;
         }
 
@@ -334,6 +317,8 @@ internal static class Program
             return 1;
         }
 
+        // DROP TABLE on a partitioned parent's child detaches it implicitly;
+        // the parent ts_kv stays intact. Verified gate above guarantees safety.
         await using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = $"DROP TABLE \"{part}\";";
@@ -402,33 +387,24 @@ internal static class Program
     // -------------------------------------------------------------------------
     static async Task PrintLoop(ProgressTracker tracker, CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        try
         {
-            try
+            while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(5_000, ct);
-                // Build the whole line under the tracker lock — enumerating Partitions
-                // while the migration thread updates them throws (Dictionary race).
-                var line = tracker.Read(p =>
-                {
-                    // Partition mode: live scylla/pg counters for the migrating partition.
-                    // entities_done is only populated by the legacy entity-key flow.
-                    var active = p.Partitions.FirstOrDefault(kv => kv.Value.State == "migrating");
-                    string partInfo = active.Key is null
-                        ? ""
-                        : $" part={active.Key} scylla={active.Value.ScyllaCount:N0}/{active.Value.PgCount:N0}";
-                    return $"[STATUS] phase={p.Phase} migrated={p.MigratedRows:N0} " +
-                           $"skipped={p.SkippedRows:N0} entities_done={p.CompletedEntities.Count}{partInfo}";
-                });
-                Console.Error.WriteLine(line);
-            }
-            catch (OperationCanceledException) { return; }
-            catch (Exception ex)
-            {
-                // Keep the loop alive — a transient failure must not silently kill [STATUS].
-                Console.Error.WriteLine($"[WARN] status loop error: {ex.Message}");
+                var p = tracker.Progress;
+                // Partition mode: live scylla/pg counters for the migrating partition.
+                // entities_done is only populated by the legacy entity-key flow.
+                var active = p.Partitions.FirstOrDefault(kv => kv.Value.State == "migrating");
+                string partInfo = active.Key is null
+                    ? ""
+                    : $" part={active.Key} scylla={active.Value.ScyllaCount:N0}/{active.Value.PgCount:N0}";
+                Console.Error.WriteLine(
+                    $"[STATUS] phase={p.Phase} migrated={p.MigratedRows:N0} " +
+                    $"skipped={p.SkippedRows:N0} entities_done={p.CompletedEntities.Count}{partInfo}");
             }
         }
+        catch (OperationCanceledException) { }
     }
 
     // -------------------------------------------------------------------------
@@ -437,14 +413,9 @@ internal static class Program
 
     static string? Flag(string[] args, string name)
     {
-        for (int i = 0; i < args.Length; i++)
-        {
+        for (int i = 0; i < args.Length - 1; i++)
             if (args[i].Equals(name, StringComparison.OrdinalIgnoreCase))
-                return i + 1 < args.Length ? args[i + 1] : null;
-            // also accept --name=value form (previously silently ignored → full re-stream)
-            if (args[i].StartsWith(name + "=", StringComparison.OrdinalIgnoreCase))
-                return args[i][(name.Length + 1)..];
-        }
+                return args[i + 1];
         return null;
     }
 }
