@@ -304,25 +304,35 @@ Prinsip (spec 5-bo'lim): schema to'liq, data — `ts_kv*` partitionlarsiz. Barch
 
 ```bash
 docker exec $OLD_PG pg_dump -U postgres -d thingsboard --schema-only -Fc > ~/backup/schema.dump
-pg_restore -h 127.0.0.1 -p 15432 -U postgres -d thingsboard ~/backup/schema.dump
+docker cp ~/backup/schema.dump postgres-new:/tmp/schema.dump
+docker exec postgres-new pg_restore -U postgres -d thingsboard --exit-on-error /tmp/schema.dump
 ```
 
 **Qadam 2 — data-only dump, `ts_kv` datasisiz** (schema allaqachon bor) — pipe, oraliq faylsiz:
 
 ```bash
+# Diqqat: --exclude-table-data='ts_kv*' patterni ts_kv_dictionary va ts_kv_latest ni ham
+# chiqarib tashlaydi (psql pattern'da * — istalgan belgi). Shuning uchun ikkita dump olinadi:
 docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc --exclude-table-data='ts_kv*' > ~/backup/nontskv.dump
-pg_restore -h 127.0.0.1 -p 15432 -U postgres -d thingsboard ~/backup/nontskv.dump
+docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc -t ts_kv_dictionary -t ts_kv_latest > ~/backup/dict-latest.dump
+# pg_restore host'da yo'q — konteyner ichida bajariladi:
+docker cp ~/backup/nontskv.dump postgres-new:/tmp/nontskv.dump
+docker cp ~/backup/dict-latest.dump postgres-new:/tmp/dict-latest.dump
+docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/nontskv.dump
+docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/dict-latest.dump
+docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT setval('ts_kv_dictionary_key_id_seq', (SELECT max(key_id) FROM ts_kv_dictionary));"
 ```
 
-Bu `ts_kv` parent + barcha child partition datalarini tashlab ketadi, lekin `ts_kv_latest`, `ts_kv_dictionary`, barcha entity jadvallari va sequences datalarini oladi.
+Birinchi dump `ts_kv` parent + barcha child partition datalarini tashlab ketadi; ikkinchisi lug'at + latest'ni alohida oladi (`--disable-triggers` — `device_profile` ↔ `ota_package` circular FK warning uchun).
 
 **Qadam 3 — tekshiruv** (yangi PG'da):
 
 ```bash
-pg_restore -h 127.0.0.1 -p 15432 -U postgres -d thingsboard -l ~/backup/nontskv.dump | grep -c "TABLE DATA"
+docker exec postgres-new pg_restore -U postgres -d thingsboard -l /tmp/nontskv.dump | grep -c "TABLE DATA"
 docker exec $OLD_PG psql -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv_dictionary;"
-psql -h 127.0.0.1 -p 15432 -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv_dictionary;"
-psql -h 127.0.0.1 -p 15432 -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv;"   # 0 bo'lishi kerak
+docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv_dictionary;"   # eski bilan bir xil bo'lishi kerak
+docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv_latest;"   # eski bilan bir xil bo'lishi kerak
+docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT count(*) FROM ts_kv;"   # 0 bo'lishi kerak
 ```
 
 > Delta-izoh: nusxa paytida eski TB ishlayotgani uchun entity/latest jadvallarga ozgina yozuv tushishi mumkin. Switchover paytida (eski TB stop qilingan) kichik jadvallar (`ts_kv_latest`, `ts_kv_dictionary`) bir marta qayta dump/restore qilinadi (tez, MB'lar darajasi). Katta jadvallar uchun takror shart emas.
@@ -386,7 +396,11 @@ sudo systemctl stop thingsboard
 
 ```bash
 docker exec $OLD_PG pg_dump -U postgres -d thingsboard --data-only -Fc -t ts_kv_latest -t ts_kv_dictionary > ~/backup/latest-delta.dump
-pg_restore -h 127.0.0.1 -p 15432 -U postgres -d thingsboard ~/backup/latest-delta.dump
+docker cp ~/backup/latest-delta.dump postgres-new:/tmp/latest-delta.dump
+# Yangi PG'da bu jadvallar allaqachon to'la — TRUNCATE qilib qayta yuklash (yangi TB hali ishlamaydi, xavfsiz):
+docker exec postgres-new psql -U postgres -d thingsboard -c 'TRUNCATE ts_kv_latest, ts_kv_dictionary;'
+docker exec postgres-new pg_restore -U postgres -d thingsboard --disable-triggers --single-transaction --exit-on-error /tmp/latest-delta.dump
+docker exec postgres-new psql -U postgres -d thingsboard -t -c "SELECT setval('ts_kv_dictionary_key_id_seq', (SELECT max(key_id) FROM ts_kv_dictionary));"
 ```
 
 **Qadam 3 — hot partition'ning so'nggi deltasini ko'chirish:**
@@ -599,7 +613,7 @@ SELECT * FROM ts_kv_cf LIMIT 10;
 - Har qanday partition verify'siz DROP qilinmaydi — dump (`~/backup/<part>.dump`) + eski PG'da data bor.
 - Switchover tekshiruvi o'tmasa: `docker compose -f docker-compose.new-stack.yml --profile tb stop tb-pe`, keyin `sudo systemctl start thingsboard` — eski stack joyida.
 - Yangi PG buzilsa: `~/backup/schema.dump` + `~/backup/nontskv.dump` dan qayta restore (8-bo'lim).
-- DROP qilingan partition kerak bo'lsa: `pg_restore -h 127.0.0.1 -p 15432 -U postgres -d thingsboard ~/backup/<part>.dump` (yangi PG'ga) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
+- DROP qilingan partition kerak bo'lsa: `docker cp ~/backup/<part>.dump postgres-new:/tmp/<part>.dump && docker exec postgres-new pg_restore -U postgres -d thingsboard /tmp/<part>.dump` (yangi PG'ga) — lekin eski PG'ga qaytarish root joyini yana to'ldiradi, faqat favqulodda.
 
 ---
 
