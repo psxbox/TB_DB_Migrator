@@ -45,6 +45,9 @@ public class Orchestrator
     // via existing entity map). Stream batches sequentially (ordering matters
     // for keyset pagination), write batches in parallel via ScyllaWriter
     // semaphore + Task.WhenAll.
+    // NOTE: `workers` is intentionally unused — streaming stays sequential by design
+    // (keyset pagination ordering); parallelism comes from Task.WhenAll + ScyllaWriter
+    // semaphore. Kept for CLI signature consistency and future use.
     // -------------------------------------------------------------------------
     public async Task RunPartitionAsync(string partition, long deltaFromTs, int workers, CancellationToken ct)
     {

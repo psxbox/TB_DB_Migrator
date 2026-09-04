@@ -187,14 +187,14 @@ internal static class Program
         var (keyMap, hybridMode) = await reader.LoadKeyMapAsync();
         var entityMap = await reader.LoadEntityMapAsync();
 
-        int n = cfg.Migrator.VerifySampleSize;
-        var sample = new List<TsRow>(n);
+        int sampleN = Math.Max(1, cfg.Migrator.VerifySampleSize);
+        var sample = new List<TsRow>(sampleN);
         await using (var cmd = conn.CreateCommand())
         {
             // Validated partition name only — identifiers cannot be parameterised.
             cmd.CommandText =
                 $"SELECT entity_id, key::text, ts, bool_v, str_v, long_v, dbl_v, json_v " +
-                $"FROM \"{part}\" ORDER BY random() LIMIT {n}";
+                $"FROM \"{part}\" ORDER BY random() LIMIT {sampleN}";
             await using var rdr = await cmd.ExecuteReaderAsync();
             while (await rdr.ReadAsync())
             {
