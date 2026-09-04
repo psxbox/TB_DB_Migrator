@@ -50,7 +50,15 @@ internal static class Program
         if (wStr is not null && int.TryParse(wStr, out int w) && w > 0)
             cfg.Migrator.Workers = w;
         string? part = Flag(args, "--partition");
-        long deltaFrom = long.TryParse(Flag(args, "--delta-from"), out var d) ? d : long.MinValue;
+        long deltaFrom = long.MinValue;
+        if (Flag(args, "--delta-from") is { } deltaStr)
+        {
+            if (!long.TryParse(deltaStr, out deltaFrom))
+            {
+                Console.Error.WriteLine($"Invalid --delta-from value '{deltaStr}' — expected epoch-milliseconds integer.");
+                return 1;
+            }
+        }
 
         AnsiConsole.MarkupLine(
             $"[bold]TB Migrator (.NET 10)[/]  workers=[yellow]{cfg.Migrator.Workers}[/]  " +
@@ -96,7 +104,8 @@ internal static class Program
                     Console.Error.WriteLine(
                         $"[INFO] Resuming partition {part}: stored scylla_count={prev.ScyllaCount} max_ts={prev.MaxTs} " +
                         $"(Scylla INSERTs are idempotent upserts — resume double-write is harmless). " +
-                        $"Pass --delta-from {prev.MaxTs} to skip already-streamed rows.");
+                        $"Pass --delta-from {prev.MaxTs - 1} — the 1 ms overlap covers same-ms rows " +
+                        "that may straddle the interrupted batch boundary.");
                 await orch.RunPartitionAsync(part, deltaFrom, cfg.Migrator.Workers, cts.Token);
                 AnsiConsole.MarkupLine($"[green]Partition {part} migration complete.[/]");
                 return 0;
@@ -157,10 +166,10 @@ internal static class Program
             Console.Error.WriteLine($"No checkpoint entry for partition '{part}'. Migrate it first.");
             return 1;
         }
-        if (entry.State != "migrated")
+        if (entry.State != "migrated" && entry.State != "verified")
         {
             Console.Error.WriteLine(
-                $"Partition '{part}' state is '{entry.State}' — verify only runs on migrated partitions.");
+                $"Partition '{part}' state is '{entry.State}' — verify runs on migrated or verified partitions.");
             return 1;
         }
 
@@ -387,19 +396,28 @@ internal static class Program
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(5_000, ct);
-                var p = tracker.Progress;
-                // Partition mode: live scylla/pg counters for the migrating partition.
-                // entities_done is only populated by the legacy entity-key flow.
-                var active = p.Partitions.FirstOrDefault(kv => kv.Value.State == "migrating");
-                string partInfo = active.Key is null
-                    ? ""
-                    : $" part={active.Key} scylla={active.Value.ScyllaCount:N0}/{active.Value.PgCount:N0}";
-                Console.Error.WriteLine(
-                    $"[STATUS] phase={p.Phase} migrated={p.MigratedRows:N0} " +
-                    $"skipped={p.SkippedRows:N0} entities_done={p.CompletedEntities.Count}{partInfo}");
+                // Build the whole line under the tracker lock — enumerating Partitions
+                // while the migration thread updates them throws (Dictionary race).
+                var line = tracker.Read(p =>
+                {
+                    // Partition mode: live scylla/pg counters for the migrating partition.
+                    // entities_done is only populated by the legacy entity-key flow.
+                    var active = p.Partitions.FirstOrDefault(kv => kv.Value.State == "migrating");
+                    string partInfo = active.Key is null
+                        ? ""
+                        : $" part={active.Key} scylla={active.Value.ScyllaCount:N0}/{active.Value.PgCount:N0}";
+                    return $"[STATUS] phase={p.Phase} migrated={p.MigratedRows:N0} " +
+                           $"skipped={p.SkippedRows:N0} entities_done={p.CompletedEntities.Count}{partInfo}";
+                });
+                Console.Error.WriteLine(line);
             }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            // Keep monitoring alive — a transient failure must not silently kill [STATUS].
+            Console.Error.WriteLine($"[WARN] status loop error: {ex.Message}");
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -394,32 +394,57 @@ public class PgReader : IAsyncDisposable
         int batchSize,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        (long, Guid, string)? last = null;
+        // Keyset pagination in PK order (entity_id, key, ts) — served directly by the
+        // ts_kv PRIMARY KEY. A ts-leading order would need an index TB 3.4 does not
+        // have and would full-scan the remaining rows on EVERY page (O(N^2/batch)).
+        // deltaFromTs is a plain filter, not part of the ordering.
+        (Guid, string, long)? last = null;
         while (true)
         {
             await using var cmd = _conn.CreateCommand();
             string keySel = hybridMode ? "key" : "key::text";
             if (last is null)
             {
-                cmd.CommandText =
-                    $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
-                    $"FROM \"{partition}\" WHERE ts > $1 ORDER BY ts, entity_id, key LIMIT $2";
-                cmd.Parameters.AddWithValue(deltaFromTs);
-                cmd.Parameters.AddWithValue(batchSize);
+                if (deltaFromTs != long.MinValue)
+                {
+                    cmd.CommandText =
+                        $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                        $"FROM \"{partition}\" WHERE ts > $1 ORDER BY entity_id, key, ts LIMIT $2";
+                    cmd.Parameters.AddWithValue(deltaFromTs);
+                    cmd.Parameters.AddWithValue(batchSize);
+                }
+                else
+                {
+                    cmd.CommandText =
+                        $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                        $"FROM \"{partition}\" ORDER BY entity_id, key, ts LIMIT $1";
+                    cmd.Parameters.AddWithValue(batchSize);
+                }
             }
             else
             {
-                cmd.CommandText =
-                    $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
-                    $"FROM \"{partition}\" WHERE (ts, entity_id, key) > ($1,$2,$3) " +
-                    "ORDER BY ts, entity_id, key LIMIT $4";
+                if (deltaFromTs != long.MinValue)
+                {
+                    cmd.CommandText =
+                        $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                        $"FROM \"{partition}\" WHERE ts > $1 AND (entity_id, key, ts) > ($2,$3,$4) " +
+                        "ORDER BY entity_id, key, ts LIMIT $5";
+                    cmd.Parameters.AddWithValue(deltaFromTs);
+                }
+                else
+                {
+                    cmd.CommandText =
+                        $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                        $"FROM \"{partition}\" WHERE (entity_id, key, ts) > ($1,$2,$3) " +
+                        "ORDER BY entity_id, key, ts LIMIT $4";
+                }
                 cmd.Parameters.AddWithValue(last.Value.Item1);
-                cmd.Parameters.AddWithValue(last.Value.Item2);
                 // hybrid: key column is int — parse back; text mode: raw string
-                if (hybridMode && int.TryParse(last.Value.Item3, out int kid))
+                if (hybridMode && int.TryParse(last.Value.Item2, out int kid))
                     cmd.Parameters.AddWithValue(kid);
                 else
-                    cmd.Parameters.AddWithValue(last.Value.Item3);
+                    cmd.Parameters.AddWithValue(last.Value.Item2);
+                cmd.Parameters.AddWithValue(last.Value.Item3);
                 cmd.Parameters.AddWithValue(batchSize);
             }
 
@@ -429,7 +454,7 @@ public class PgReader : IAsyncDisposable
             {
                 var row = hybridMode ? ReadRowIntKey(rdr, keyMap) : ReadRow(rdr, keyMap, false);
                 batch.Add(row);
-                last = (row.Ts, Guid.Parse(row.EntityId), rdr[1].ToString()!);
+                last = (Guid.Parse(row.EntityId), rdr[1].ToString()!, row.Ts);
             }
             if (batch.Count > 0) yield return batch;
             if (batch.Count < batchSize) yield break;

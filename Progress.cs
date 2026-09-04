@@ -55,4 +55,12 @@ public class ProgressTracker
             File.WriteAllText(_file, JsonSerializer.Serialize(Progress, JsonOpts));
         }
     }
+
+    // Thread-safe read for background readers (PrintLoop): the selector runs under
+    // the same lock Update holds, so it never enumerates Partitions while the
+    // migration thread replaces entries (Dictionary version-counter race).
+    public T Read<T>(Func<Progress, T> selector)
+    {
+        lock (_lock) return selector(Progress);
+    }
 }
