@@ -22,8 +22,8 @@ services:
   scylladb:
     image: scylladb/scylla:2026.1
     container_name: scylladb-new
-    mem_limit: 1400m
-    command: --smp 1 --memory 1G --overprovisioned 1
+    mem_limit: 1g
+    command: --smp 1 --memory 512M --overprovisioned 1
     ports:
       - "127.0.0.1:9042:9042"
     volumes:

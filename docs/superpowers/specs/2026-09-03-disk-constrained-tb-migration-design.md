@@ -63,7 +63,7 @@ Bitta fayl, uchta service. TB `profiles: ["tb"]` bilan — dastlab `up postgres-
   - image: mavjud `scylladb/scylla:2026.1` saqlanadi.
   - host port: `127.0.0.1:9042:9042` (eski stack'da Scylla yo'q — konflikt yo'q).
   - data: external docker volume `tb-scylla-data:/var/lib/scylla` (oldindan `docker volume create` bilan yaratiladi).
-  - memory: `mem_limit: 1400m` (Scylla process'ga ~1 GB: `command: --smp 1 --memory 1G --overprovisioned 1`; 400 MB — OS/page-cache zaxirasi).
+  - memory: `mem_limit: 1g` (Scylla process'ga 512 MB: `command: --smp 1 --memory 512M --overprovisioned 1`; ~512 MB — container OS/page-cache/housekeeping zaxirasi; 1G `--memory` host'da 500 MB bo'sh joyda `insufficient physical memory` bilan start olmaydi).
   - healthcheck: `cqlsh -e 'describe keyspaces'` (mavjud).
 - `tb-pe`:
   - image: `thingsboard/tb-pe-node:3.4.1PE`.
@@ -93,10 +93,10 @@ Nega external docker volume: compose'dan oldin bir marta `docker volume create` 
 | Service | Limit | Reservation | Izoh |
 |---------|-------|-------------|------|
 | `tb-pe` | 3g | 2g | Heap `JAVA_OPTS=-Xms1G -Xmx2G`; eski RPM TB stop qilingandan keyin ishga tushadi — bir vaqtda ikkita TB ishlamaydi |
-| `scylladb` | 1400m | — | Process'ga `--smp 1 --memory 1G --overprovisioned 1`; 400 MB page-cache zaxirasi |
+| `scylladb` | 1g | — | Process'ga `--smp 1 --memory 512M --overprovisioned 1`; ~512 MB container OS/page-cache zaxirasi |
 | `postgres-new` | 512m | 256m | `shared_buffers=128MB`, kichik baza uchun yetarli |
 
-Jami yangi stack: ~4.9 GB. Qolgan ~3 GB: OS + eski PG container + migrator (.NET host'da) + boshqa servislar. Migrator'da `workers: 2` va `scylla_concurrency: 32` bilan boshlash tavsiya etiladi (Scylla 1 GB limitda timeout bermasligi uchun).
+Jami yangi stack: ~4.5 GB. Qolgan ~3.5 GB: OS + eski PG container + migrator (.NET host'da) + boshqa servislar. Migrator'da `workers: 2` va `scylla_concurrency: 32` bilan boshlash tavsiya etiladi (Scylla 512M limitda timeout bermasligi uchun).
 
 ## 4. Tayyorgarlik (joy bo'shatish + inventar)
 

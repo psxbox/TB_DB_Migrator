@@ -48,7 +48,7 @@
 - Eski stack: TB 3.4.1 PE (RPM, `systemctl thingsboard`) + PostgreSQL v18 (Docker, ~102 GB DB, root'da ~10 GB bo'sh)
 - `/home` alohida — `~/backup/` dagi `pg_dump -Fc` dumplari faqat shu yerga yoziladi (root'ga katta fayl yo'q)
 - Yangi stack bitta compose'da (`docker-compose.new-stack.yml`): `postgres-new` + `scylladb` + `tb-pe` (dastlab o'chiq)
-- Jami RAM 8 GB — limitlar: `tb-pe` 3g, `scylladb` 1400m, `postgres-new` 512m
+- Jami RAM 8 GB — limitlar: `tb-pe` 3g, `scylladb` 1g (`--memory 512M`), `postgres-new` 512m
 - `VACUUM FULL` — **taqiqlanadi** (joy talab qiladi + lock); faqat oddiy `VACUUM`
 
 ### Qachon ishlatiladi?
@@ -108,8 +108,8 @@ REMOTE LINUX SERVER
   ┌─────────────────────────────────────────────────────┐
   │  postgres-new (postgres:18, 127.0.0.1:15432, 512m)  │
   │    vol: tb-pg-new-data (ts_kv siz baza, kichik)      │
-  │  scylladb (scylla:2026.1, 127.0.0.1:9042, 1400m)     │
-  │    vol: tb-scylla-data  (--smp 1 --memory 1G)        │
+  │  scylladb (scylla:2026.1, 127.0.0.1:9042, 1g)          │
+  │    vol: tb-scylla-data  (--smp 1 --memory 512M)       │
   │  tb-pe (tb-pe-node:3.4.1PE, profile: tb, 3g)         │
   │    dastlab O'CHIQ, switchover'da yoqiladi            │
   └─────────────────────────────────────────────────────┘
@@ -150,7 +150,7 @@ REMOTE LINUX SERVER
 | OS | Linux (Ubuntu 20.04+) | Tavsiya: Ubuntu 22.04 LTS |
 | Docker | 24.0+ | `docker compose` v2 plugin (`docker-compose` v1 emas) |
 | .NET SDK | 10.0+ | Migrator host'da ishlaydi |
-| RAM | **8 GB jami** | Byudjet: `tb-pe` 3g + `scylladb` 1400m + `postgres-new` 512m ≈ 4.9 GB; qolgan ~3 GB: OS + eski PG + migrator + boshqa servislar |
+| RAM | **8 GB jami** | Byudjet: `tb-pe` 3g + `scylladb` 1g + `postgres-new` 512m ≈ 4.5 GB; qolgan ~3.5 GB: OS + eski PG + migrator + boshqa servislar |
 | Eski stack | TB 3.4.1 PE (RPM) + PG v18 (Docker) | DB ~102 GB, root'da ~10 GB bo'sh |
 | `/home` | Alohida partition, bo'sh joy bor | `~/backup/` — faqat shu yerga dump yoziladi |
 | CPU | 2 yadro | Tavsiya: 4+ yadro |
@@ -160,10 +160,10 @@ REMOTE LINUX SERVER
 | Service | Limit | Reservation | Izoh |
 |---------|-------|-------------|------|
 | `tb-pe` | 3g | 2g | `JAVA_OPTS=-Xms1G -Xmx2G`; eski RPM TB stop qilingandan keyin yoqiladi — ikkita TB bir vaqtda ishlamaydi |
-| `scylladb` | 1400m | — | `--smp 1 --memory 1G --overprovisioned 1`; 400 MB page-cache zaxirasi |
+| `scylladb` | 1g | — | `--smp 1 --memory 512M --overprovisioned 1`; ~512 MB container OS/page-cache zaxirasi |
 | `postgres-new` | 512m | 256m | `shared_buffers=128MB`, kichik (`ts_kv` siz) baza uchun yetarli |
 
-Migrator'da `workers: 2` va `scylla_concurrency: 32` bilan boshlang (Scylla 1 GB limitda timeout bermasligi uchun).
+Migrator'da `workers: 2` va `scylla_concurrency: 32` bilan boshlang (Scylla 512M limitda timeout bermasligi uchun).
 
 ### Tekshirish buyruqlari
 
@@ -628,7 +628,7 @@ PostgreSQL dan o'qish `LIMIT/OFFSET` o'rniga `(ts, entity_id, key)` bo'yicha key
 
 ### Resurslar (8 GB RAM byudjeti)
 
-`docker-compose.new-stack.yml` dagi limitlar (3-bo'lim): `tb-pe` 3g, `scylladb` 1400m (`--smp 1 --memory 1G --overprovisioned 1`), `postgres-new` 512m. Eski `docker-compose.scylla.yml` (cheklovsiz) bu rejimda ishlatilmaydi.
+`docker-compose.new-stack.yml` dagi limitlar (3-bo'lim): `tb-pe` 3g, `scylladb` 1g (`--smp 1 --memory 512M --overprovisioned 1`), `postgres-new` 512m. Eski `docker-compose.scylla.yml` (cheklovsiz) bu rejimda ishlatilmaydi.
 
 ### screen ishlatish majburiy
 
