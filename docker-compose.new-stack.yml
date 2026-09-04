@@ -46,6 +46,7 @@ services:
       scylladb:
         condition: service_healthy
     environment:
+      TB_SERVICE_ID: tb-pe-new
       JAVA_OPTS: "-Xms1G -Xmx2G"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-new:5432/${NEW_PG_DB:-thingsboard}
       SPRING_DATASOURCE_USERNAME: ${NEW_PG_USER:-postgres}
@@ -58,6 +59,9 @@ services:
       CASSANDRA_KEYSPACE_NAME: thingsboard
       TB_LICENSE_SECRET: ${TB_LICENSE_SECRET:-}
       TB_LICENSE_INSTANCE_DATA_FILE: ${TB_LICENSE_INSTANCE_DATA_FILE:-}
+    volumes:
+      - ./tb-pe/conf:/config
+      - ./tb-pe/log:/var/log/thingsboard
     ports:
       - "8080:8080"
       - "1883:1883"
