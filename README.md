@@ -549,15 +549,23 @@ migrator:
 
 ## 12. Checkpoint va resume
 
-Migrator progress ni `migration_progress.json` fayliga saqlaydi (har bir batch'dan so'ng + partition holati: `partitions: {<part>: {state, pg_count, scylla_count, dump_file, verified, dropped, max_ts}}`). Agar migratsiya to'xtasa, `--resume` bilan davom ettirish mumkin (Scylla INSERT'lar idempotent upsert — takror yozish zararsiz).
+Migrator progress ni `migration_progress.json` fayliga saqlaydi (har bir batch'dan so'ng + partition holati: `partitions: {<part>: {state, pg_count, scylla_count, dump_file, verified, dropped, max_ts, last_entity_id, last_key, last_ts}}`). Agar migratsiya to'xtasa, davom ettirish mumkin (Scylla INSERT'lar idempotent upsert — takror yozish zararsiz).
+
+### Streaming tartibi (muhim)
+
+Full pass (`--delta-from` siz) **PK tartibida** o'qiydi: `ORDER BY entity_id, key, ts` — PK indeks to'g'ridan xizmat qiladi, O(N). Delta rejimi (`--delta-from <ts>`) ts-tartibida o'qiydi (`ts > filtrl` — faqat hot partition catch-up uchun; ts indeks yo'q, O(N²), shuning uchun katta partitionlarda ishlatilmaydi).
 
 ### Partition resume
 
-```bash
-# To'xtagan partition'ni davom ettirish (MaxTs checkpoint'da saqlangan)
-dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --resume --workers 2
+To'xtagan full pass avtomatik davom etadi: checkpoint'dagi cursor (`last_entity_id/last_key/last_ts`) bo'yicha aynan qolgan joydan. Cursor yo'q (eski checkpoint) yoki pass tugallangan bo'lsa — full idempotent pass qayta boshlanadi (hisoblagich o'z-o'zini to'g'rilaydi):
 
-# Delta'dan boshlash (allaqachon ko'chgan qatorlarni o'tkazib yuborish)
+```bash
+dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --workers 2
+```
+
+Delta catch-up (faqat hot partition, eski TB yozayotgan paytda):
+
+```bash
 dotnet bin/Release/net10.0/tbmigrator.dll start --partition <part> --delta-from <max_ts> --workers 2
 ```
 

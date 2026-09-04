@@ -25,7 +25,10 @@ public record PartitionProgress(
     [property: JsonPropertyName("dump_file")] string? DumpFile,
     [property: JsonPropertyName("verified")] bool Verified,
     [property: JsonPropertyName("dropped")] bool Dropped,
-    [property: JsonPropertyName("max_ts")] long MaxTs);
+    [property: JsonPropertyName("max_ts")] long MaxTs,
+    [property: JsonPropertyName("last_entity_id")] string? LastEntityId = null, // PK-order stream cursor
+    [property: JsonPropertyName("last_key")] string? LastKey = null,           // raw key (physical column value)
+    [property: JsonPropertyName("last_ts")] long LastTs = 0);                  // cursor ts (batch[^1].Ts, PK order)
 
 public class ProgressTracker
 {

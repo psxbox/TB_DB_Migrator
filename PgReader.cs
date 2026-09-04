@@ -437,6 +437,59 @@ public class PgReader : IAsyncDisposable
         }
     }
 
+    // --- Partition streaming in PRIMARY KEY order ----------------------------
+    // ORDER BY (entity_id, key, ts) — the child partition's PK index serves the
+    // scan directly (O(N)). The ts-ordered variant above is O(N²): every page
+    // full-scans + sorts the whole partition, because there is no index on ts.
+    public async IAsyncEnumerable<List<TsRow>> StreamPartitionPkAsync(
+        string partition,
+        (Guid EntityId, string KeyRaw, long Ts)? resumeCursor,
+        Dictionary<int, string> keyMap,
+        bool hybridMode,
+        int batchSize,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var last = resumeCursor;
+        while (true)
+        {
+            await using var cmd = _conn.CreateCommand();
+            string keySel = hybridMode ? "key" : "key::text";
+            if (last is null)
+            {
+                cmd.CommandText =
+                    $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                    $"FROM \"{partition}\" ORDER BY entity_id, key, ts LIMIT $1";
+                cmd.Parameters.AddWithValue(batchSize);
+            }
+            else
+            {
+                cmd.CommandText =
+                    $"SELECT entity_id, {keySel}, ts, bool_v, str_v, long_v, dbl_v, json_v " +
+                    $"FROM \"{partition}\" WHERE (entity_id, key, ts) > ($1,$2,$3) " +
+                    "ORDER BY entity_id, key, ts LIMIT $4";
+                cmd.Parameters.AddWithValue(last.Value.EntityId);
+                // hybrid: key column is int — parse back; text mode: raw string
+                if (hybridMode && int.TryParse(last.Value.KeyRaw, out int kid))
+                    cmd.Parameters.AddWithValue(kid);
+                else
+                    cmd.Parameters.AddWithValue(last.Value.KeyRaw);
+                cmd.Parameters.AddWithValue(last.Value.Ts);
+                cmd.Parameters.AddWithValue(batchSize);
+            }
+
+            var batch = new List<TsRow>(batchSize);
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            while (await rdr.ReadAsync(ct))
+            {
+                var row = hybridMode ? ReadRowIntKey(rdr, keyMap) : ReadRow(rdr, keyMap, false);
+                batch.Add(row);
+                last = (Guid.Parse(row.EntityId), rdr[1].ToString()!, row.Ts);
+            }
+            if (batch.Count > 0) yield return batch;
+            if (batch.Count < batchSize) yield break;
+        }
+    }
+
     // --- Helpers ------------------------------------------------------------
 
     private static TsRow ReadRowIntKey(NpgsqlDataReader rdr, Dictionary<int, string> keyMap)

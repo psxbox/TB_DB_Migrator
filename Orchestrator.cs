@@ -54,18 +54,38 @@ public class Orchestrator
         var (keyMap, hybridMode) = await _reader.LoadKeyMapAsync(ct);
         var entityMap = await _reader.LoadEntityMapAsync(ct);
         long pgCount = await _reader.CountPartitionAsync(partition, ct);
-        // Delta runs (--delta-from) ADD to the previous run's written count — rows
-        // before deltaFromTs are already in Scylla. A full run starts from zero.
+
+        // Modes:
+        //   DELTA (--delta-from) — ts-ordered stream of rows with ts > filter.
+        //     Used for hot-partition catch-up while TB is writing. Counter adds
+        //     to the previous run (rows before the filter are already in Scylla).
+        //   FULL (no --delta-from) — PK-ordered stream (entity_id, key, ts):
+        //     the PK index serves the scan directly — O(N). Scylla INSERTs are
+        //     idempotent, so a fresh full pass self-corrects the counter.
+        //     Resume: checkpoint cursor (LastEntityId/LastKey/LastTs) continues
+        //     exactly where an interrupted FULL pass stopped.
+        bool deltaMode = deltaFromTs != long.MinValue;
         long baseCount = 0, prevMaxTs = 0;
         string? prevDump = null;
+        (Guid EntityId, string KeyRaw, long Ts)? resumeCursor = null;
         if (_tracker.Progress.Partitions.TryGetValue(partition, out var prev))
         {
             prevDump = prev.DumpFile;
-            if (deltaFromTs != long.MinValue)
+            prevMaxTs = prev.MaxTs;
+            if (deltaMode)
             {
                 baseCount = prev.ScyllaCount;
-                prevMaxTs = prev.MaxTs;
             }
+            else if (prev.State == "migrating"
+                     && prev.LastEntityId is { Length: > 0 } leid
+                     && prev.LastKey is { Length: > 0 } lkey
+                     && Guid.TryParse(leid, out var leidGuid))
+            {
+                baseCount = prev.ScyllaCount;
+                resumeCursor = (leidGuid, lkey, prev.LastTs);
+            }
+            // else: legacy checkpoint without cursor or completed pass → full
+            // idempotent pass from zero (self-correcting counter).
         }
         _tracker.Update(p =>
         {
@@ -73,10 +93,17 @@ public class Orchestrator
             p.Partitions[partition] = new PartitionProgress(
                 "migrating", pgCount, baseCount, prevDump, false, false, prevMaxTs);
         });
-        long written = 0, maxTs = deltaFromTs;
-        // Stream batches sequentially (ordering matters for keyset pagination),
-        // writes are parallel via Task.WhenAll + ScyllaWriter semaphore.
-        await foreach (var batch in _reader.StreamPartitionAsync(partition, deltaFromTs, keyMap, hybridMode, _cfg.Migrator.PartitionBatch, ct))
+
+        // Reverse key map: TsRow.Key holds the resolved key NAME; the resume
+        // cursor needs the RAW key (physical column value). Key names are unique
+        // in ts_kv_dictionary, so the reverse lookup is exact.
+        Dictionary<string, string>? keyNameToRaw = hybridMode
+            ? keyMap.ToDictionary(kv => kv.Value, kv => kv.Key.ToString())
+            : null;
+
+        long written = 0, maxTs = prevMaxTs;
+
+        await foreach (var batch in ReadBatchesAsync(partition, deltaFromTs, resumeCursor, keyMap, hybridMode, ct))
         {
             var byType = new Dictionary<string, List<TsRow>>();
             foreach (var row in batch)
@@ -93,11 +120,35 @@ public class Orchestrator
             });
             await Task.WhenAll(tasks);
             written += batch.Count;
+            var lastRow = batch[^1];
+            string lastRawKey = keyNameToRaw is null
+                ? lastRow.Key
+                : keyNameToRaw.TryGetValue(lastRow.Key, out var raw) ? raw : lastRow.Key;
             long w = baseCount + written, m = maxTs;
-            _tracker.Update(p => p.Partitions[partition] = p.Partitions[partition] with { ScyllaCount = w, MaxTs = m });
+            _tracker.Update(p => p.Partitions[partition] = p.Partitions[partition] with
+            {
+                ScyllaCount = w, MaxTs = m,
+                LastEntityId = lastRow.EntityId, LastKey = lastRawKey, LastTs = lastRow.Ts
+            });
             _tracker.Update(p => p.MigratedRows += batch.Count);
         }
         _tracker.Update(p => p.Partitions[partition] = p.Partitions[partition] with { State = "migrated" });
+    }
+
+    private async IAsyncEnumerable<List<TsRow>> ReadBatchesAsync(
+        string partition,
+        long deltaFromTs,
+        (Guid EntityId, string KeyRaw, long Ts)? resumeCursor,
+        Dictionary<int, string> keyMap,
+        bool hybridMode,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        if (deltaFromTs != long.MinValue)
+            await foreach (var b in _reader.StreamPartitionAsync(partition, deltaFromTs, keyMap, hybridMode, _cfg.Migrator.PartitionBatch, ct))
+                yield return b;
+        else
+            await foreach (var b in _reader.StreamPartitionPkAsync(partition, resumeCursor, keyMap, hybridMode, _cfg.Migrator.PartitionBatch, ct))
+                yield return b;
     }
 
     // -------------------------------------------------------------------------
