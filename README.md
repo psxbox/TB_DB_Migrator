@@ -109,7 +109,7 @@ REMOTE LINUX SERVER
   │  postgres-new (postgres:18, 127.0.0.1:15432, 512m)  │
   │    vol: tb-pg-new-data (ts_kv siz baza, kichik)      │
   │  scylladb (scylla:2026.1, 127.0.0.1:9042, 2g)          │
-  │    vol: tb-scylla-data  (--smp 1, cgroup 2g)           │
+  │    vol: tb-scylla-data  (--smp 2, cgroup 2g)           │
   │  tb-pe (tb-pe-node:3.4.1PE, profile: tb, 3g)         │
   │    dastlab O'CHIQ, switchover'da yoqiladi            │
   └─────────────────────────────────────────────────────┘
@@ -160,7 +160,7 @@ REMOTE LINUX SERVER
 | Service | Limit | Reservation | Izoh |
 |---------|-------|-------------|------|
 | `tb-pe` | 3g | 2g | `JAVA_OPTS=-Xms1G -Xmx2G`; eski RPM TB stop qilingandan keyin yoqiladi — ikkita TB bir vaqtda ishlamaydi |
-| `scylladb` | 2g | — | `--smp 1 --overprovisioned 1`; seastar limitni cgroup'dan o'zi aniqlaydi (`--memory 1G` qat'iy tekshiruvi `available 500M` deb start olmasdi) |
+| `scylladb` | 2g | — | `--smp 2 --overprovisioned 1` (host 4 yadro; write-bound yuk ikki shardga bo'linadi); seastar limitni cgroup'dan o'zi aniqlaydi (`--memory 1G` qat'iy tekshiruvi `available 500M` deb start olmasdi) |
 | `postgres-new` | 512m | 256m | `shared_buffers=128MB`, kichik (`ts_kv` siz) baza uchun yetarli |
 
 Migrator'da `workers: 2` va `scylla_concurrency: 32` bilan boshlang.
@@ -648,7 +648,7 @@ PostgreSQL dan o'qish `LIMIT/OFFSET` o'rniga `(ts, entity_id, key)` bo'yicha key
 
 ### Resurslar (8 GB RAM byudjeti)
 
-`docker-compose.new-stack.yml` dagi limitlar (3-bo'lim): `tb-pe` 3g, `scylladb` 2g (`--smp 1 --overprovisioned 1`, seastar cgroup'dan aniqlaydi), `postgres-new` 512m. Eski `docker-compose.scylla.yml` (cheklovsiz) bu rejimda ishlatilmaydi.
+`docker-compose.new-stack.yml` dagi limitlar (3-bo'lim): `tb-pe` 3g, `scylladb` 2g (`--smp 2 --overprovisioned 1`, seastar cgroup'dan aniqlaydi), `postgres-new` 512m. Eski `docker-compose.scylla.yml` (cheklovsiz) bu rejimda ishlatilmaydi.
 
 ### screen ishlatish majburiy
 

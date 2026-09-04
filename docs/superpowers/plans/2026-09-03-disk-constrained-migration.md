@@ -20,7 +20,7 @@
 - `DROP TABLE <part>` only when: dump file exists + readable, `verify` passed (checkpoint flag), `--verified` flag given, and for hot partition additionally switchover check passed.
 - Old PG container name never hardcoded — `OLD_PG` env + discovery; tool connects via `PG_HOST/PG_PORT` env over `config.yaml`.
 - Existing CLI flags (`--resume`, `--workers`, `--historical-only`) keep working.
-- RAM budget (8 GB host, other services running): `tb-pe` mem_limit 3g (JAVA_OPTS `-Xms1G -Xmx2G`), `scylladb` mem_limit 2g (`--smp 1 --overprovisioned 1`, no `--memory` — seastar sizes from cgroup), `postgres-new` mem_limit 512m (`shared_buffers=128MB`). Migrator starts with `workers: 2`, `scylla_concurrency: 32`.
+- RAM budget (8 GB host, other services running): `tb-pe` mem_limit 3g (JAVA_OPTS `-Xms1G -Xmx2G`), `scylladb` mem_limit 2g (`--smp 2 --overprovisioned 1`, no `--memory` — seastar sizes from cgroup), `postgres-new` mem_limit 512m (`shared_buffers=128MB`). Migrator starts with `workers: 2`, `scylla_concurrency: 32`.
 
 ---
 
@@ -83,7 +83,7 @@ services:
     image: scylladb/scylla:2026.1
     container_name: scylladb-new
     mem_limit: 2g
-    command: --smp 1 --overprovisioned 1
+    command: --smp 2 --overprovisioned 1
     ports:
       - "127.0.0.1:9042:9042"
     volumes:
