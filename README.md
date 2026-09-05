@@ -729,3 +729,22 @@ Migratsiya davridagi stackdan o'tish: avval eski stackni to'xtating (ma'lumotlar
 docker compose -f docker-compose.new-stack.yml --profile tb down
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+### Migrator papkasidan tashqariga deploy (ixtiyoriy)
+
+Compose fayli mustaqil: `name: tb-prod` qat'iy project nomi bor, volume'lar external — istalgan papkadan ishlaydi (masalan `/opt/tb-prod`). Ko'chirishda **4 narsa** birga bo'lishi shart: compose fayli, `.env`, `tb-pe/conf/` (thingsboard.conf, logback.xml), `tb-pe/license/` (license.data, UID 799:799).
+
+```bash
+# Serverda:
+sudo mkdir -p /opt/tb-prod/tb-pe
+cd ~/projects/TB_DB_Migrator
+cp docker-compose.prod.yml .env.example /opt/tb-prod/
+cp -r tb-pe/conf tb-pe/license /opt/tb-prod/tb-pe/
+cd /opt/tb-prod && cp .env.example .env && vi .env
+
+# eski stackni to'xtatish (volume'lar qoladi), yangi joydan ko'tarish:
+docker compose -f docker-compose.new-stack.yml --profile tb down
+cd /opt/tb-prod && docker compose -f docker-compose.prod.yml up -d
+```
+
+Eslatma: bu papka git bilan bog'lanmagan — compose yangilanishlarini repo'dan qo'lda ko'chirib turish kerak (yoki papkani git clone ichida saqlang). `chown 799:799 /opt/tb-prod/tb-pe/license` unutilmasin (TB container UID 799).

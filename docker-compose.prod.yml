@@ -6,7 +6,11 @@
 #     o'zgartirmang va `docker volume rm` qilmang!
 #   - Talab: bir papkada `.env` fayl bo'lishi kerak (namuna: .env.example).
 #   - Ishga tushirish: docker compose -f docker-compose.prod.yml up -d
+#   - `name:` qat'iy project nomi — fayl istalgan papkadan ishlaydi
+#     (masalan /opt/tb-prod), papka nomiga bog'liq emas.
 # ============================================================================
+
+name: tb-prod
 
 services:
   postgres-new:
