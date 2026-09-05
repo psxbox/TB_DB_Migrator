@@ -1,0 +1,114 @@
+# ============================================================================
+# PRODUCTION compose — TB 3.4.1 PE (PG + ScyllaDB) switchover'dan keyingi holat.
+#   - docker-compose.new-stack.yml (migratsiya davri) O'CHIRILMADI — arxiv sifatida qoladi.
+#   - Muhim: volume nomlari migratsiya davridagi bilan BIR XIL (tb-pg-new-data,
+#     tb-scylla-data) — shu tariqa ko'chgan ma'lumotlarga ulanadi. Bu nomlarni
+#     o'zgartirmang va `docker volume rm` qilmang!
+#   - Talab: bir papkada `.env` fayl bo'lishi kerak (namuna: .env.example).
+#   - Ishga tushirish: docker compose -f docker-compose.prod.yml up -d
+# ============================================================================
+
+services:
+  postgres-new:
+    image: postgres:18
+    container_name: postgres-new
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    command: postgres -c shared_buffers=128MB -c effective_cache_size=256MB -c maintenance_work_mem=64MB -c max_connections=100
+    environment:
+      POSTGRES_DB: ${NEW_PG_DB:-thingsboard}
+      POSTGRES_USER: ${NEW_PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${NEW_PG_PASSWORD:?Set NEW_PG_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:15432:5432"   # faqat localhost — tashqariga ochiq emas
+    volumes:
+      - tb-pg-new-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NEW_PG_USER:-postgres} -d ${NEW_PG_DB:-thingsboard} || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  scylladb:
+    image: scylladb/scylla:2026.1
+    container_name: scylladb-new
+    restart: unless-stopped
+    mem_limit: 2g
+    # --memory bayrog'i YO'Q: seastar cgroup'dan (2g) o'zi aniqlaydi.
+    # --smp 2: host 4 yadro (migratsiya davrida tekshirilgan konfiguratsiya).
+    command: --smp 2 --overprovisioned 1
+    ports:
+      - "127.0.0.1:9042:9042"    # faqat localhost — tashqariga ochiq emas
+    volumes:
+      - tb-scylla-data:/var/lib/scylla
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  tb-pe:
+    image: thingsboard/tb-pe-node:3.4.1PE
+    container_name: tb-pe-new
+    restart: unless-stopped
+    mem_limit: 3g
+    mem_reservation: 2g
+    depends_on:
+      postgres-new:
+        condition: service_healthy
+      scylladb:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # host servislariga chiqish uchun
+    environment:
+      TB_SERVICE_ID: tb-pe-new
+      JAVA_OPTS: "-Xms1G -Xmx2G"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-new:5432/${NEW_PG_DB:-thingsboard}
+      SPRING_DATASOURCE_USERNAME: ${NEW_PG_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${NEW_PG_PASSWORD:?Set NEW_PG_PASSWORD in .env}
+      DATABASE_TS_TYPE: cassandra
+      TS_KV_PARTITIONING: MONTHS
+      CASSANDRA_URL: scylladb:9042
+      CASSANDRA_CLUSTER_NAME: "TB Cluster"
+      CASSANDRA_USE_CREDENTIALS: "false"
+      CASSANDRA_KEYSPACE_NAME: thingsboard
+      TB_LICENSE_SECRET: ${TB_LICENSE_SECRET:?Set TB_LICENSE_SECRET in .env}
+      TB_LICENSE_INSTANCE_DATA_FILE: ${TB_LICENSE_INSTANCE_DATA_FILE:-/data/license.data}
+    volumes:
+      - ./tb-pe/conf:/config
+      - ./tb-pe/license:/data
+    networks:
+      - default
+      - bs          # external network: emqxauth-api (REST :5000) shu tarmoqda
+    ports:
+      - "8080:8080"
+      - "1883:1883"
+      - "5683:5683/udp"
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+networks:
+  bs:
+    external: true
+
+volumes:
+  tb-pg-new-data:
+    external: true
+    name: tb-pg-new-data
+  tb-scylla-data:
+    external: true
+    name: tb-scylla-data

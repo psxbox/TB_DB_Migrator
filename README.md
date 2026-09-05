@@ -28,6 +28,7 @@
 12. [Checkpoint va resume](#12-checkpoint-va-resume)
 13. [Xatoliklarni ko'rish](#13-xatoliklarni-korish)
 14. [Rollback](#14-rollback)
+15. [Production compose](#15-production-compose)
 15. [Muhim eslatmalar](#15-muhim-eslatmalar)
 
 ---
@@ -687,4 +688,44 @@ dotnet bin/Release/net10.0/tbmigrator.dll list-partitions
 sudo systemctl stop thingsboard
 # latest/dictionary delta + hot delta (9.3), tb-pe up, full+API check
 # qolganlar: dump -> start -> verify -> drop (9.4, yangidan-eskiga)
+```
+
+---
+
+## 15. Production compose
+
+Migratsiya tugagach (`docker-compose.new-stack.yml` arxiv sifatida qoladi) doimiy ishlash uchun **`docker-compose.prod.yml`** ishlatiladi:
+
+- **Restart policy:** har bir servis `restart: unless-stopped` — server qayta yonsa stack o'zi ko'tariladi.
+- **Log rotatsiya:** har bir servis uchun `json-file`, `max-size: 100m`, `max-file: 3` — loglar diski to'ldirmaydi (servis bo'yicha maksimum ~300 MB).
+- **Ma'lumot uzluksizligi:** volume nomlari migratsiya davridagisi bilan **bir xil** (`tb-pg-new-data`, `tb-scylla-data`, `external: true`) — ko'chgan ma'lumotlarga ulanadi. Bu nomlarni o'zgartirmang.
+- **Xavfsizlik:** PG (`15432`) va Scylla (`9042`) portlari faqat `127.0.0.1` ga bog'langan; TB (`8080/1883/5683`) tashqariga ochiq.
+- **Konteyner log'larini** host diskda tekshirish: `docker inspect --format='{{.LogPath}}' tb-pe-new`.
+
+### `.env` fayli (majburiy)
+
+Prod compose parol/secret'larni `.env` dan o'qiydi; `NEW_PG_PASSWORD` va `TB_LICENSE_SECRET` to'ldirilmagan bo'lsa compose **xato bilan to'xtaydi** (`:?err` sintaksisi). `.env` `.gitignore`da — gitga kirmaydi; namuna: `.env.example`.
+
+| O'zgaruvchi | Majburiy | Default | Izoh |
+|-------------|----------|---------|------|
+| `NEW_PG_PASSWORD` | ✅ ha | — | Yangi PG paroli (kuchli, prod) |
+| `TB_LICENSE_SECRET` | ✅ ha | — | TB PE license secret (portal) |
+| `NEW_PG_DB` | yo'q | `thingsboard` | DB nomi (default qoldiring) |
+| `NEW_PG_USER` | yo'q | `postgres` | DB user (default qoldiring — bazada allaqachon mavjud) |
+| `TB_LICENSE_INSTANCE_DATA_FILE` | yo'q | `/data/license.data` | Container ichki yo'l; `./tb-pe/license/` ga mount |
+
+### Ishga tushirish (switchover'dan keyin)
+
+```bash
+cd ~/projects/TB_DB_Migrator
+cp .env.example .env && vi .env            # parol + license secret
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps
+```
+
+Migratsiya davridagi stackdan o'tish: avval eski stackni to'xtating (ma'lumotlar volume'larda qoladi), keyin yuqoridagi buyruq:
+
+```bash
+docker compose -f docker-compose.new-stack.yml --profile tb down
+docker compose -f docker-compose.prod.yml up -d
 ```
