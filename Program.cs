@@ -189,6 +189,24 @@ internal static class Program
         var entityMap = await reader.LoadEntityMapAsync();
 
         int sampleN = Math.Max(1, cfg.Migrator.VerifySampleSize);
+
+        // Optional --seed: makes ORDER BY random() reproducible (same rows every
+        // run) — setseed only accepts (-1,1), so normalize into [0,1).
+        string? seedArg = Flag(args, "--seed");
+        if (seedArg is not null)
+        {
+            if (!double.TryParse(seedArg, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 0)
+            {
+                Console.Error.WriteLine("Invalid --seed value (expected non-negative number).");
+                return 1;
+            }
+            await using var seedCmd = conn.CreateCommand();
+            seedCmd.CommandText = string.Format(
+                System.Globalization.CultureInfo.InvariantCulture, "SELECT setseed({0:R})", s - Math.Floor(s));
+            await seedCmd.ExecuteNonQueryAsync();
+        }
+
         var sample = new List<TsRow>(sampleN);
         await using (var cmd = conn.CreateCommand())
         {
@@ -221,24 +239,46 @@ internal static class Program
             cfg.Scylla.Keyspace, cfg.Migrator.ScyllaConcurrency);
         var sreader = new ScyllaReader(scylla.Session, cfg.Scylla.Keyspace);
 
-        int mismatches = 0;
+        int mismatches = 0, missing = 0, reported = 0;
         foreach (var row in sample)
         {
-            if (!entityMap.TryGetValue(row.EntityId, out var et)) { mismatches++; continue; }
+            if (!entityMap.TryGetValue(row.EntityId, out var et))
+            {
+                mismatches++;
+                if (reported < MaxMismatchReports)
+                {
+                    Console.Error.WriteLine(
+                        $"  [NO-ENTITY] entity={row.EntityId} key={row.Key} ts={row.Ts} — absent from entity map.");
+                    reported++;
+                }
+                continue;
+            }
             // Apply the same cast transform the writer used, otherwise cast_strings=true
             // always mismatches (PG str_v vs Scylla long_v/dbl_v).
             var expected = cfg.Migrator.CastStrings ? ScyllaWriter.TryCast(row) : row;
             var got = await sreader.GetPointAsync(
                 et, Guid.Parse(row.EntityId), row.Key,
                 Partition.Compute(row.Ts, cfg.Migrator.Partitioning), row.Ts);
-            if (got is null
-                || got.Ts    != expected.Ts
-                || got.BoolV != expected.BoolV
-                || got.StrV  != expected.StrV
-                || got.LongV != expected.LongV
-                || got.DblV  != expected.DblV
-                || got.JsonV != expected.JsonV)
-                mismatches++;
+            if (got is null)
+            {
+                mismatches++; missing++;
+                if (reported < MaxMismatchReports)
+                {
+                    Console.Error.WriteLine(
+                        $"  [MISSING] entity={row.EntityId} key={row.Key} ts={row.Ts} partition={Partition.Compute(row.Ts, cfg.Migrator.Partitioning)} — row not found in Scylla.");
+                    reported++;
+                }
+                continue;
+            }
+            var diffs = DiffFields(expected, got);
+            if (diffs.Count == 0) continue;
+            mismatches++;
+            if (reported < MaxMismatchReports)
+            {
+                Console.Error.WriteLine(
+                    $"  [DIFF]    entity={row.EntityId} key={row.Key} ts={row.Ts}: {string.Join("; ", diffs)}");
+                reported++;
+            }
         }
 
         if (mismatches == 0)
@@ -249,8 +289,38 @@ internal static class Program
                 $"samples={sample.Count} mismatches=0.[/]");
             return 0;
         }
-        Console.Error.WriteLine($"Verify FAILED for '{part}': {mismatches} mismatches out of {sample.Count} samples.");
+        Console.Error.WriteLine(
+            $"Verify FAILED for '{part}': {mismatches} mismatches out of {sample.Count} samples " +
+            $"(missing={missing}). Details above (first {MaxMismatchReports}).");
         return 1;
+    }
+
+    private const int MaxMismatchReports = 10;
+
+    // IEEE 754: NaN != NaN with '!=', but NaN.Equals(NaN) is true — telemetry
+    // NaN values are identical data, not mismatches.
+    private static bool NullableDoubleEquals(double? a, double? b) =>
+        a.HasValue != b.HasValue ? false
+        : !a.HasValue || a.Value.Equals(b.Value);
+
+    private static string Trunc(string? s)
+    {
+        if (s is null) return "null";
+        s = s.Replace("\n", "\\n").Replace("\r", "\\r");
+        return s.Length <= 60 ? $"'{s}'" : $"'{s[..57]}...' ({s.Length} chars)";
+    }
+
+    private static List<string> DiffFields(TsRow expected, TsRow got)
+    {
+        var d = new List<string>();
+        if (expected.Ts    != got.Ts)    d.Add($"ts {expected.Ts} != {got.Ts}");
+        if (expected.BoolV != got.BoolV) d.Add($"bool_v {expected.BoolV} != {got.BoolV}");
+        if (expected.StrV  != got.StrV)  d.Add($"str_v {Trunc(expected.StrV)} != {Trunc(got.StrV)}");
+        if (expected.LongV != got.LongV) d.Add($"long_v {expected.LongV} != {got.LongV}");
+        if (!NullableDoubleEquals(expected.DblV, got.DblV))
+            d.Add($"dbl_v {expected.DblV?.ToString("R") ?? "null"} != {got.DblV?.ToString("R") ?? "null"}");
+        if (expected.JsonV != got.JsonV) d.Add($"json_v {Trunc(expected.JsonV)} != {Trunc(got.JsonV)}");
+        return d;
     }
 
     // -------------------------------------------------------------------------
