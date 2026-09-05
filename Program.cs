@@ -239,16 +239,21 @@ internal static class Program
             cfg.Scylla.Keyspace, cfg.Migrator.ScyllaConcurrency);
         var sreader = new ScyllaReader(scylla.Session, cfg.Scylla.Keyspace);
 
-        int mismatches = 0, missing = 0, reported = 0;
+        int mismatches = 0, missing = 0, orphans = 0, reported = 0;
         foreach (var row in sample)
         {
             if (!entityMap.TryGetValue(row.EntityId, out var et))
             {
-                mismatches++;
+                // Orphan telemetry: the entity was deleted from PG but its ts_kv
+                // rows remain (TB 3.4 does not cascade-delete). The migrator
+                // skips these by design — entity_type is unknowable and TB can
+                // never query telemetry of a non-existent entity. Expected
+                // absent in Scylla: not a mismatch.
+                orphans++;
                 if (reported < MaxMismatchReports)
                 {
                     Console.Error.WriteLine(
-                        $"  [NO-ENTITY] entity={row.EntityId} key={row.Key} ts={row.Ts} — absent from entity map.");
+                        $"  [ORPHAN]  entity={row.EntityId} key={row.Key} ts={row.Ts} — entity deleted, row intentionally not migrated.");
                     reported++;
                 }
                 continue;
@@ -281,17 +286,26 @@ internal static class Program
             }
         }
 
+        // Guardrail: a few orphans are normal (deleted entities), but a large
+        // share means the entity map is incomplete — do not bless the partition.
+        if (orphans > sample.Count / 20)
+        {
+            Console.Error.WriteLine(
+                $"Verify FAILED for '{part}': {orphans} orphan rows out of {sample.Count} samples (>5%) " +
+                "— entity map may be incomplete. Check the reported entities directly in PG.");
+            return 1;
+        }
         if (mismatches == 0)
         {
             tracker.Update(p => p.Partitions[part] = p.Partitions[part] with { Verified = true, State = "verified" });
             AnsiConsole.MarkupLine(
                 $"[green]Verify OK for '{part}': pg={pgCount:N0} scylla={entry.ScyllaCount:N0} " +
-                $"samples={sample.Count} mismatches=0.[/]");
+                $"samples={sample.Count} mismatches=0 orphans={orphans}.[/]");
             return 0;
         }
         Console.Error.WriteLine(
             $"Verify FAILED for '{part}': {mismatches} mismatches out of {sample.Count} samples " +
-            $"(missing={missing}). Details above (first {MaxMismatchReports}).");
+            $"(missing={missing}, orphans={orphans}). Details above (first {MaxMismatchReports}).");
         return 1;
     }
 
