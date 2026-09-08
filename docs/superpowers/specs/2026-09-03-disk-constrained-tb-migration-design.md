@@ -68,7 +68,7 @@ Bitta fayl, uchta service. TB `profiles: ["tb"]` bilan — dastlab `up postgres-
 - `tb-pe`:
   - image: `thingsboard/tb-pe-node:3.4.1PE`.
   - `profiles: ["tb"]` — dastlab ishlamaydi.
-  - memory: `mem_limit: 3g`, `mem_reservation: 2g`; `JAVA_OPTS: "-Xms1G -Xmx2G"` (konteyner limit ichida qolishi uchun heap 2 GB, qolgan 1 GB — off-heap/Metaspace/OS).
+  - memory: `mem_limit: 4g`, `mem_reservation: 2g`; `JAVA_OPTS: "-Xms1G -Xmx2.5G"` (konteyner limit ichida qolishi uchun heap 2.5 GB, qolgan ~1.5 GB — off-heap/Metaspace/OS).
   - env: `SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-new:5432/thingsboard`,
     `DATABASE_TS_TYPE=cassandra`, `TS_KV_PARTITIONING=MONTHS`,
     `CASSANDRA_URL=scylladb:9042`, `CASSANDRA_KEYSPACE_NAME=thingsboard`.
@@ -92,7 +92,7 @@ Nega external docker volume: compose'dan oldin bir marta `docker volume create` 
 
 | Service | Limit | Reservation | Izoh |
 |---------|-------|-------------|------|
-| `tb-pe` | 3g | 2g | Heap `JAVA_OPTS=-Xms1G -Xmx2G`; eski RPM TB stop qilingandan keyin ishga tushadi — bir vaqtda ikkita TB ishlamaydi |
+| `tb-pe` | 4g | 2g | Heap `JAVA_OPTS=-Xms1G -Xmx2.5G`; eski RPM TB stop qilingandan keyin ishga tushadi — bir vaqtda ikkita TB ishlamaydi |
 | `scylladb` | 2g | — | `--smp 2 --overprovisioned 1` (host 4 yadro — write-bound migratsiya yuki ikki shardga bo'linadi; restart'da token ring avtomatik qayta taqsimlanadi); seastar cgroup'dan o'zi aniqlaydi |
 | `postgres-new` | 512m | 256m | `shared_buffers=128MB`, kichik baza uchun yetarli |
 

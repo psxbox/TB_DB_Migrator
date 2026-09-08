@@ -43,7 +43,7 @@ services:
     image: thingsboard/tb-pe-node:3.4.1PE
     container_name: tb-pe-new
     profiles: ["tb"]
-    mem_limit: 3g
+    mem_limit: 4g
     mem_reservation: 2g
     depends_on:
       postgres-new:
@@ -54,7 +54,7 @@ services:
       - "host.docker.internal:host-gateway"   # host servislariga (masalan localhost:10021 REST) chiqish uchun
     environment:
       TB_SERVICE_ID: tb-pe-new
-      JAVA_OPTS: "-Xms1G -Xmx2G"
+      JAVA_OPTS: "-Xms1G -Xmx2.5G"   # heap 2.5G + ~1.5G off-heap/metaspace < 4g limit
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-new:5432/${NEW_PG_DB:-thingsboard}
       SPRING_DATASOURCE_USERNAME: ${NEW_PG_USER:-postgres}
       SPRING_DATASOURCE_PASSWORD: ${NEW_PG_PASSWORD:-postgres}
