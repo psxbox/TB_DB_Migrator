@@ -160,7 +160,7 @@ REMOTE LINUX SERVER
 
 | Service | Limit | Reservation | Izoh |
 |---------|-------|-------------|------|
-| `tb-pe` | 4g | 2g | `JAVA_OPTS=-Xms1G -Xmx2.5G` (heap 2.5G + ~1.5G off-heap/Metaspace limit ichida); eski RPM TB stop qilingandan keyin yoqiladi — ikkita TB bir vaqtda ishlamaydi |
+| `tb-pe` | 4g | 2g | `JAVA_OPTS=-Xms1G -Xmx2560m` (2560m=2.5G; eski JVM kasr `-Xmx` qabul qilmaydi); eski RPM TB stop qilingandan keyin yoqiladi — ikkita TB bir vaqtda ishlamaydi |
 | `scylladb` | 2g | — | `--smp 2 --overprovisioned 1` (host 4 yadro; write-bound yuk ikki shardga bo'linadi); seastar limitni cgroup'dan o'zi aniqlaydi (`--memory 1G` qat'iy tekshiruvi `available 500M` deb start olmasdi) |
 | `postgres-new` | 512m | 256m | `shared_buffers=128MB`, kichik (`ts_kv` siz) baza uchun yetarli |
 

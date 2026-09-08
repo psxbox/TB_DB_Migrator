@@ -77,7 +77,7 @@ services:
       - "host.docker.internal:host-gateway"   # host servislariga chiqish uchun
     environment:
       TB_SERVICE_ID: tb-pe-new
-      JAVA_OPTS: "-Xms1G -Xmx2.5G"   # heap 2.5G + ~1.5G off-heap/metaspace < 4g limit
+      JAVA_OPTS: "-Xms1G -Xmx2560m"   # 2560m=2.5G; butun son bo'lishi shart (eski JVM kasr qabul qilmaydi)
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-new:5432/${NEW_PG_DB:-thingsboard}
       SPRING_DATASOURCE_USERNAME: ${NEW_PG_USER:-postgres}
       SPRING_DATASOURCE_PASSWORD: ${NEW_PG_PASSWORD:?Set NEW_PG_PASSWORD in .env}

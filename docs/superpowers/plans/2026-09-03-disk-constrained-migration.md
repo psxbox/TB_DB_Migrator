@@ -20,7 +20,7 @@
 - `DROP TABLE <part>` only when: dump file exists + readable, `verify` passed (checkpoint flag), `--verified` flag given, and for hot partition additionally switchover check passed.
 - Old PG container name never hardcoded — `OLD_PG` env + discovery; tool connects via `PG_HOST/PG_PORT` env over `config.yaml`.
 - Existing CLI flags (`--resume`, `--workers`, `--historical-only`) keep working.
-- RAM budget (8 GB host, other services running): `tb-pe` mem_limit 4g (JAVA_OPTS `-Xms1G -Xmx2.5G`), `scylladb` mem_limit 2g (`--smp 2 --overprovisioned 1`, no `--memory` — seastar sizes from cgroup), `postgres-new` mem_limit 512m (`shared_buffers=128MB`). Migrator starts with `workers: 2`, `scylla_concurrency: 32`.
+- RAM budget (8 GB host, other services running): `tb-pe` mem_limit 4g (JAVA_OPTS `-Xms1G -Xmx2560m` — eski JVM kasr `-Xmx` qabul qilmaydi, butun son ishlatiladi), `scylladb` mem_limit 2g (`--smp 2 --overprovisioned 1`, no `--memory` — seastar sizes from cgroup), `postgres-new` mem_limit 512m (`shared_buffers=128MB`). Migrator starts with `workers: 2`, `scylla_concurrency: 32`.
 
 ---
 
@@ -106,7 +106,7 @@ services:
       scylladb:
         condition: service_healthy
     environment:
-      JAVA_OPTS: "-Xms1G -Xmx2.5G"
+      JAVA_OPTS: "-Xms1G -Xmx2560m"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-new:5432/${NEW_PG_DB:-thingsboard}
       SPRING_DATASOURCE_USERNAME: ${NEW_PG_USER:-postgres}
       SPRING_DATASOURCE_PASSWORD: ${NEW_PG_PASSWORD:-postgres}
